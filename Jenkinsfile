@@ -9,11 +9,11 @@ pipeline {
         BASE_REPOSITORY_URI = "184806450101.dkr.ecr.eu-west-1.amazonaws.com/base"
         PROJECT_REPOSITORY_URI = "184806450101.dkr.ecr.eu-west-1.amazonaws.com/project"
         SUBSTR_COMMIT ="${GIT_COMMIT}".substring(0,7)
-        PROJECT_NAME = "shipit"
+        PROJECT_NAME = "shipit-engine"
         NAMESPACE = "shipit"
         HELM_CHART_PATH = "helm_chart"
         GIT_PRIVATE_KEY = "github_private_key"
-        IMAGE_TAG = "shipit-${SUBSTR_COMMIT}"
+        IMAGE_TAG = "shipit-engine-${SUBSTR_COMMIT}"
     }
 
     options {
@@ -29,33 +29,35 @@ pipeline {
                 'push it to the docker registry. It will not deploy the project.')
         booleanParam(name: 'FORCE_REBUILD_IMAGES', defaultValue: false, description: 'If checked it will force rebuild the images' +
             ' (Dockerfile-to-deploy) from scratch before pushing it to the docker registry.')
-        booleanParam(name: 'FORCE_RECREATE_POD', defaultValue: false, description: 'If checked it will recreate the pod even if there are no changes')
     }
 
     stages {
         stage('Building/Pushing docker image') {
             steps {
                 script{
-                    buildAndPush("integration")
+                    // buildAndPush("integration")
+                    echo "TBD"
                 }
             }
         }
-        stage('Testing') {
-            agent {
-                docker {
-                    image "${PROJECT_REPOSITORY_URI}:${IMAGE_TAG}"
-                    args "-e RAILS_ENV=test --entrypoint=''"
-                    label "master"
-                }
-            }            
-            steps {
-                script{
-                    dir("test/dummy"){
-                        sh "RAILS_ENV=test bundle exec rake db:create db:schema:load test"
-                    }
-                }
-            }
-        }
+        // stage('Testing') {
+        //     agent {
+        //         docker {
+        //             image "${PROJECT_REPOSITORY_URI}:${IMAGE_TAG}"
+        //             args "-e RAILS_ENV=test --entrypoint=''"
+        //             label "master"
+        //         }
+        //     }            
+        //     steps {
+        //         script{
+        //             echo "TBD"
+        //             dir("test/dummy"){
+
+        //                 sh "RAILS_ENV=test bundle exec rake db:create db:schema:load test"
+        //             }
+        //         }
+        //     }
+        // }
 
         stage('Deploying') {
             agent {
@@ -72,7 +74,10 @@ pipeline {
             }
             steps {
                 script {
-                    deploy("integration", "integration","eu-central-1")
+                    // deploy("integration", "integration","eu-central-1")
+                    echo "TBD"
+
+
                     // deploy("production", "production","us-east-1")
 
                     // // run db migrate inside the pod
