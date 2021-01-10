@@ -25,9 +25,17 @@ module Shipit
         end
       else
         predictive_build = generate_predictive_build(pipeline)
+        unless predictive_build
+          Shipit::ProcessPipelineBuildJob.set(wait: 1.minute).perform_later(pipeline)
+          return true
+        end
       end
 
       case predictive_build.status.to_sym
+      when :pending
+        # Something went wrong
+        predictive_build.cancel
+        Shipit::ProcessPipelineBuildJob.perform_later(pipeline)
       when :ci_stack_tasks
         run_stacks_tasks(pipeline, predictive_build)
       when :ci_pipeline_run, :ci_pipeline_running, :ci_pipeline_verification,
@@ -36,7 +44,7 @@ module Shipit
       when :ci_pipeline_verified
         merging_process(predictive_build)
       else
-        Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(pipeline)
+        Shipit::ProcessPipelineBuildJob.set(wait: 1.minute).perform_later(pipeline)
       end
     end
 
@@ -117,25 +125,34 @@ module Shipit
 
     def generate_predictive_build(pipeline)
       stacks = pipeline.mergeable_stacks
-      return true unless stacks
+      return false unless stacks
 
-      predictive_build = PredictiveBuild.create(pipeline: pipeline, branch: "PREDICTIVE-BRANCH-:id")
-      predictive_build.update(branch: "PREDICTIVE-BRANCH-#{predictive_build.id}")
+      predictive_build = nil
       predictive_build_mode = nil
 
       Shipit::Pipeline::MERGE_MODES.each do |mode|
         predictive_build_mode = mode
         candidates = pipeline.release_candidates(stacks, mode)
-        next unless candidates
+        next if candidates.empty?
+
+        predictive_build = PredictiveBuild.create(pipeline: pipeline, branch: "PREDICTIVE-BRANCH-:id")
+        predictive_build.update(branch: "PREDICTIVE-BRANCH-#{predictive_build.id}")
 
         limit = Shipit::Pipeline::MERGE_SINGLE_MODES.include?(mode) ? 1 : nil
         merged_candidates = create_predictive_branches(predictive_build, candidates, limit)
 
-        break if merged_candidates.!empty?
+        break if merged_candidates.any?
+      end
+      return false unless predictive_build
+
+      # If no branches are found, we're done!
+      if predictive_build.predictive_branches.empty?
+        predictive_build.completed
+        return predictive_build
       end
 
       predictive_build.update(mode: predictive_build_mode) if predictive_build_mode != Pipeline::MERGE_MODE_DEFAULT
-      predictive_build.stack_tasks if predictive_build.predictive_branches.any?
+      predictive_build.stack_tasks
       predictive_build
     end
 
@@ -158,7 +175,7 @@ module Shipit
         abort_running_predictive_build(predictive_build)
         update_failed_build(predictive_build, Shipit::PredictiveBranch::STACK_TASKS_FAILED)
       else
-        if p_branches[:completed].!empty? && p_branches[:completed].size == predictive_build.predictive_branches.size
+        if p_branches[:completed].any? && p_branches[:completed].size == predictive_build.predictive_branches.size
           predictive_build.pipeline_tasks
         end
         Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(pipeline)
