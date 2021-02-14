@@ -2,6 +2,8 @@ source 'https://rubygems.org'
 
 gemspec
 
+gem 'vcita-infra',  :git => "git@github.com:vcita/infra.git", :branch => 'rails6_redis4.2.2'
+
 gem 'sqlite3'
 gem 'activejob-uniqueness'
 

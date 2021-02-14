@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require 'fileutils'
+require 'vcita/infra'
 
 module Shipit
   class Deploy < Task
@@ -11,6 +12,7 @@ module Shipit
       after_transition to: :success, do: :update_undeployed_commits_count
       after_transition to: :aborted, do: :trigger_revert_if_required
       after_transition any => any, do: :update_release_status
+      after_transition any => any, do: :set_metric
       after_transition any => any, do: :update_commit_deployments
       after_transition any => any, do: :update_last_deploy_time
     end
@@ -216,6 +218,19 @@ module Shipit
       end
     rescue Exception => error
       Rails.logger.error "Can't set_deploy_commit_on_pr. message: #{error.message}"
+    end
+
+    def set_metric
+      if status.in?(%w[failed error timedout aborted success])
+        labels = {
+          final_result: status,
+          duration: ((updated_at - created_at) / 3600).round(2),
+          repository:  stack.repository.full_name
+        }
+        Vcita::Infra::ApplicationMetrics.increment(:deploys, labels)
+      end
+    rescue Exception => error
+      Rails.logger.error "Can't set deploys metric. message: #{error.message}"
     end
 
     def permalink

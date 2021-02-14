@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require 'vcita/infra'
 
 module Shipit
   class PredictiveBuild < Record
@@ -8,6 +9,7 @@ module Shipit
 
     WAITING_STATUSES = %w(pending).freeze
     WIP_STATUSES = %w(pending branched tasks_running tasks_completed waiting_for_merging failed_commits_validation).freeze
+    FINAL_STATUSES = %w(completed merging_failed failed rejected canceled).freeze
 
     state_machine :status, initial: :pending do
       state :pending
@@ -131,6 +133,10 @@ module Shipit
       end
     end
 
+    state_machine :status do
+      after_transition any => any, do: :set_metric
+    end
+
     def build_failed?
       ci_stack_tasks_failed? || ci_pipeline_tasks_failed?
     end
@@ -165,6 +171,20 @@ module Shipit
       else
         false
       end
+    end
+
+    def set_metric
+      if status.in?(FINAL_STATUSES)
+        labels = {
+          pipeline: pipeline.id,
+          final_result: status,
+          duration: ((updated_at - created_at) / 3600).round(2),
+          mode:  mode
+        }
+        Vcita::Infra::ApplicationMetrics.increment(:predictive_builds, labels)
+      end
+    rescue Exception => error
+      Rails.logger.error "Can't set predictive_builds metric. message: #{error.message}"
     end
 
     def in_EMERGENCY_mode?

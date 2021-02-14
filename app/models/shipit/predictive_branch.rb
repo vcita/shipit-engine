@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require 'vcita/infra'
 
 module Shipit
   class PredictiveBranch < Record
@@ -19,6 +20,7 @@ module Shipit
     REJECTION_OPTIONS = %w(stack_tasks_failed pipeline_tasks_failed merged_failed).freeze
     WAITING_STATUSES = %w(pending).freeze
     WIP_STATUSES = %w(pending tasks_running tasks_verification).freeze
+    FINAL_STATUSES = %w(completed failed tasks_canceled).freeze
 
     state_machine :status, initial: :pending do
       state :pending
@@ -60,6 +62,10 @@ module Shipit
 
     end
 
+    state_machine :status do
+      after_transition any => any, do: :set_metric
+    end
+
     def tasks_in_progress?
       pending? || tasks_running? || tasks_verification? || tasks_verifying? || tasks_canceling?
     end
@@ -78,6 +84,20 @@ module Shipit
       else
         false
       end
+    end
+
+    def set_metric
+      if status.in?(FINAL_STATUSES)
+        labels = {
+          pipeline: stack.pipeline.id,
+          final_result: status,
+          duration: ((updated_at - created_at) / 3600).round(2),
+          repository:  stack.repository.full_name
+        }
+        Vcita::Infra::ApplicationMetrics.increment(:predictive_branches, labels)
+      end
+    rescue Exception => error
+      logger.error "Can't set predictive_branches metric. message: #{error.message}", error
     end
 
     def update_status(task)

@@ -1,4 +1,6 @@
 # frozen_string_literal: true
+require 'vcita/infra'
+
 module Shipit
   class MergeRequest < ApplicationRecord
     include DeferredTouch
@@ -121,6 +123,22 @@ module Shipit
       before_transition %i(pending) => :merged do |pr|
         Stack.increment_counter(:undeployed_commits_count, pr.stack_id)
       end
+
+      after_transition any => any, do: :set_metric
+    end
+
+    def set_metric
+      if status.in?(%w[rejected canceled merged])
+        labels = {
+          id: id,
+          final_result: status,
+          duration: ((updated_at - created_at) / 3600).round(2),
+          repository: stack.repository.full_name
+        }
+        Vcita::Infra::ApplicationMetrics.increment(:merge_requests, labels)
+      end
+    rescue Exception => error
+      Rails.logger.error "Can't set merge_requests metric. message: #{error.message}"
     end
 
     def self.schedule_merges
