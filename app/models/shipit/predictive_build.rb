@@ -189,7 +189,7 @@ module Shipit
       pipeline_task_status = task.status.to_sym
       predictive_task_type = task.predictive_task_type.to_sym
 
-      status, jobs, no_match_message = parse_task_output(task)
+      status, jobs, no_match_message = Shipit::PredictiveBuild.parse_task_output(task)
       upsert_ci_job_statuses(jobs)
 
       pipeline_tasks_cache_key = "PredictiveBuild::update_status_#{id}"
@@ -240,7 +240,9 @@ module Shipit
       task.chunks.each do |chunk|
         if chunk.text.include?('job_name:') && chunk.text.include?('link:') && chunk.text.include?('status:')
           cmd = {}
-          chunk.text.split(' ').each do |substr|
+          start_index = chunk.text.index('job_name:')
+          text = chunk.text[start_index..-1]
+          text.split(' ').each do |substr|
             substr_arr = substr.split(':')
             cmd[substr_arr.first.to_sym] = substr_arr.last if substr_arr.first.in?(['job_name', 'link', 'status'])
           end

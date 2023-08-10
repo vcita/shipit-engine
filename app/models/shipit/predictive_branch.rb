@@ -99,7 +99,7 @@ module Shipit
       task_status = task.status.to_sym
       predictive_task_type = task.predictive_task_type.to_sym
 
-      status, jobs, no_match_message = parse_task_output(task)
+      status, jobs, no_match_message = Shipit::PredictiveBuild.parse_task_output(task)
       upsert_ci_job_statuses(jobs) unless predictive_task_type == :run
 
       ci_tasks_cache_key = "PredictiveBranch::update_status_#{id}"
@@ -153,31 +153,6 @@ module Shipit
 
         end
       end
-    end
-
-    def parse_task_output(task)
-      no_match_message = false
-      jobs = {}
-      statuses = {aborted: 0, running: 0, success: 0}
-      task.chunks.each do |chunk|
-        if chunk.text.include?('job_name:') && chunk.text.include?('link:') && chunk.text.include?('status:')
-          cmd = {}
-          chunk.text.split(' ').each do |substr|
-            substr_arr = substr.split(':')
-            cmd[substr_arr.first.to_sym] = substr_arr.last if substr_arr.first.in?(['job_name', 'link', 'status'])
-          end
-          jobs[cmd[:job_name]] = cmd
-          statuses[cmd[:status].downcase.to_sym] += 1 if statuses[cmd[:status].downcase.to_sym].present?
-        end
-        if chunk.text.include?('No match found')
-          no_match_message = true
-        end
-      end
-
-      return :aborted, jobs, no_match_message if statuses[:aborted] > 0
-      return :running, jobs, no_match_message if statuses[:running] > 0
-      return :success, jobs, no_match_message if statuses[:success] > 0
-      return false, jobs, no_match_message
     end
 
     def has_ci_tasks?
