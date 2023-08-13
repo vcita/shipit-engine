@@ -233,7 +233,7 @@ module Shipit
       end
     end
 
-    def parse_task_output(task)
+    def self.parse_task_output(task)
       no_match_message = false
       jobs = {}
       statuses = {aborted: 0, running: 0, success: 0}
