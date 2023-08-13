@@ -7,7 +7,7 @@ module Shipit
     def perform
       Rails.logger.info("Reaping #{zombie_tasks.size} running tasks.")
       zombie_tasks.each do |task|
-        Rails.logger.info("Reaping task #{task.id}: #{task.title}")
+        Rails.logger.info("Reaping task #{task.id}: #{task.title}, status: #{task.status}, updated_at: #{task.updated_at}")
         task.report_dead!
       end
     end
