@@ -58,10 +58,6 @@ module Shipit
       git('rev-list', "#{from}..#{to}",'--first-parent', chdir: @chdir)
     end
 
-    def git_delete_branch(branch)
-      git('push', 'origin', '-d', branch, chdir: @chdir, env: env)
-    end
-
     def create_directories
       FileUtils.mkdir_p(@stack.builds_path)
     end
