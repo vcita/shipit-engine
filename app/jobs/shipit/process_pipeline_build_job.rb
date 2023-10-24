@@ -259,9 +259,7 @@ module Shipit
           stack_commands[p_branch.stack].git_clone(chdir: dir).run!
           stack_commands[p_branch.stack].git_fetch(p_branch.branch).run!
           stack_commands[p_branch.stack].git_merge_ff(p_branch.branch).run!
-          if p_branch.stack.repo_name == "securityhubexporter"
-            stack_commands[p_branch.stack].git_delete_branch(p_branch.branch).run!
-          end
+          stack_commands[p_branch.stack].git_delete_branch(p_branch.branch).run!
         end
       rescue
         predictive_build.merging_failed
