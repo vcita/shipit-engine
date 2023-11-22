@@ -60,7 +60,7 @@ pipeline {
         stage('Deploying') {
             agent {
                 docker {
-                    image getAgentImageURI("aws-kubectl-helm-agent")
+                    image getAgentImageURI("aws-kubectl-helm-agent") 
                     args "-u root"
                     label "master"
                 }
