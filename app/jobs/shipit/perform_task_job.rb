@@ -18,10 +18,14 @@ module Shipit
     def run
       @task.ping
       @task.run!
+      Rails.logger.info("Task #{@task.id} run!")
       checkout_repository
+      Rails.logger.info("Task #{@task.id} checkout_repository")
       perform_task
       @task.write("\nCompleted successfully\n")
+      Rails.logger.info("Task #{@task.id} Completed successfully")
       @task.report_complete!
+      Rails.logger.info("Task #{@task.id} report_complete!")
     rescue Command::TimedOut => error
       @task.write("\n#{error.message}\n")
       @task.report_timeout!(error)

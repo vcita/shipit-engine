@@ -293,8 +293,6 @@ module Shipit
     end
 
     def ping
-      Rails.logger.info("Pinging task #{id}")
-      Shipit.redis.set("#{status_key}:time", Time.now, ex: PRESENCE_CHECK_TIMEOUT)
       Shipit.redis.set(status_key, 'alive', ex: PRESENCE_CHECK_TIMEOUT)
     end
 
