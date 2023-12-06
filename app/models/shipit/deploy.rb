@@ -241,6 +241,7 @@ module Shipit
       if stack.release_status? && stack.release_status_delay.positive?
         enter_validation!
       else
+        Rails.logger.info("Task #{id} super")
         super
       end
     end
@@ -311,6 +312,7 @@ module Shipit
     end
 
     def update_release_status
+      Rails.logger.info("Task #{id} before update_release_status")
       return unless stack.release_status?
       description = nil
       case status
@@ -335,7 +337,9 @@ module Shipit
           append_release_status('success', description)
         end
       end
+      Rails.logger.info("Task #{id} before set_deploy_comment_on_pr")
       set_deploy_comment_on_pr(status, description, permalink) if description
+      Rails.logger.info("Task #{id} update_release_status")
     end
 
     def check_for_retry
@@ -363,16 +367,22 @@ module Shipit
     end
 
     def schedule_merges
+      Rails.logger.info("Task #{id} before schedule_merges")
       stack.schedule_merges
+      Rails.logger.info("Task #{id} schedule_merges")
     end
 
     def schedule_continuous_delivery
+      Rails.logger.info("Task #{id} before schedule_continuous_delivery")
       return unless stack.continuous_deployment?
       ContinuousDeliveryJob.perform_later(stack)
+      Rails.logger.info("Task #{id} schedule_continuous_delivery")
     end
 
     def update_undeployed_commits_count
+      Rails.logger.info("Task #{id} before update_undeployed_commits_count")
       stack.update_undeployed_commits_count(until_commit)
+      Rails.logger.info("Task #{id} update_undeployed_commits_count")
     end
 
     def update_last_deploy_time
