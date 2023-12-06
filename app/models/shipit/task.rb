@@ -352,13 +352,17 @@ module Shipit
     end
 
     def emit_hooks_if_status_changed
+      Rails.logger.info("Task #{id} before emit_hooks_if_status_changed")
       return unless @status_changed
       @status_changed = nil
       emit_hooks
+      Rails.logger.info("Task #{id} emit_hooks_if_status_changed")
     end
 
     def emit_hooks
+      Rails.logger.info("Task #{id} before emit_hooks")
       Hook.emit(hook_event, stack, hook_event => self, status: status, stack: stack)
+      Rails.logger.info("Task #{id} before emit_hooks")
     end
 
     def hook_event

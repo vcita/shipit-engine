@@ -96,6 +96,7 @@ module Shipit
     end
 
     def capture!(command)
+      Rails.logger.info("Task #{@task.id} running command: #{command}")
       command.start do
         @task.ping
         check_for_abort
