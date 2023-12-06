@@ -63,6 +63,7 @@ module Shipit
 
     def perform_task
       capture_all!(@commands.install_dependencies)
+      Rails.logger.info("Task #{@task.id} install_dependencies")
       capture_all!(@commands.perform)
     end
 
