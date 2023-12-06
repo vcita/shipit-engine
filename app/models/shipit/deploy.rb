@@ -338,8 +338,15 @@ module Shipit
         end
       end
       Rails.logger.info("Task #{id} before set_deploy_comment_on_pr")
-      set_deploy_comment_on_pr(status, description, permalink) if description
+      schedule_pr_comment!(status, description, permalink) if description
       Rails.logger.info("Task #{id} update_release_status")
+    end
+
+    def schedule_pr_comment!(status, description, permalink)
+      ProcessPrCommentJob.perform_later(task_id: id,
+                                        status: status,
+                                        description: description,
+                                        permalink: permalink)
     end
 
     def check_for_retry
