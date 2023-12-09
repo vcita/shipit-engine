@@ -7,12 +7,10 @@ module Shipit
 
     def env
       commit_sha = @task.until_commit.sha
-      commits_sha = @task.related_commits_sha.join(",")
       super.merge(
         'SHA' => commit_sha,
         'REVISION' => commit_sha,
         'DIFF_LINK' => diff_url,
-        'COMMITS' => commits_sha,
       )
     end
 
