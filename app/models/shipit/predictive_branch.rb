@@ -242,7 +242,7 @@ module Shipit
       predictive_build.predictive_branches.each do |p_build_branch|
         failed_branches << p_build_branch if p_build_branch.failed?
       end
-      return "Something went wrong, we had to start over." if failed_branches.empty?
+      return "Something went wrong, please start over." if failed_branches.empty?
       res = []
       res << "We had to start over, we failed to process your request due to CI failures of the following projects: "
       failed_branches.each do |fb|
