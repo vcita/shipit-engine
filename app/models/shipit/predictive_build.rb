@@ -277,6 +277,7 @@ module Shipit
     end
 
     def aborting_tasks(is_failed, reject_reason)
+      Rails.logger.info("Predictive build #{id} aborting_tasks; predictive build data: #{self.to_json}")
       if ci_pipeline_tasks_running?
         ci_pipeline_canceling
         trigger_pipeline_tasks(true) if predictive_branches.any?

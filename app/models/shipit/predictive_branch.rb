@@ -217,7 +217,10 @@ module Shipit
       predictive_build.predictive_branches.each do |p_build_branch|
         failed_branches << p_build_branch if p_build_branch.failed?
       end
-      return "Something went wrong, please start over." if failed_branches.empty?
+      if failed_branches.empty?
+        Rails.logger.info("Predictive branch #{id} additional_failed_information - No failed branches; predictive branch data: #{self.to_json}")
+        return "Something went wrong, please start over."
+      end
       res = []
       res << "We had to start over, we failed to process your request due to CI failures of the following projects: "
       failed_branches.each do |fb|

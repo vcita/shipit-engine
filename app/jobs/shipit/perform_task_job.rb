@@ -53,6 +53,12 @@ module Shipit
 
     def check_for_abort
       @task.should_abort? do |times_killed|
+        abort_msg = "Task ##{@task.id} check_for_abort"
+        begin
+          abort_msg += "; task data: #{@task.to_json}"
+        rescue
+        end
+        Rails.logger.info(abort_msg)
         if times_killed > 3
           abort!(signal: 'KILL')
         else
