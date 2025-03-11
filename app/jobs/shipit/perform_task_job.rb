@@ -42,7 +42,7 @@ module Shipit
     def abort!(signal: 'TERM')
       pid = @task.pid
       if pid
-        @task.write("$ kill #{pid}\n")
+        @task.write("$ kill #{pid}\n")˝
         Process.kill(signal, pid)
       else
         @task.write("Can't abort, no recorded pid, WTF?\n")
@@ -57,6 +57,8 @@ module Shipit
         begin
           abort_msg += "; task data: #{@task.to_json}"
         rescue
+        ensure
+          abort_msg += "; backtrace: [#{Thread.current.backtrace.join(";")}]"
         end
         Rails.logger.info(abort_msg)
         if times_killed > 3

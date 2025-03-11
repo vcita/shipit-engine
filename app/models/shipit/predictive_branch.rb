@@ -199,12 +199,14 @@ module Shipit
     end
 
     def cancel_predictive_merge_requests(reject_reason = nil)
+      Rails.logger.info("Predictive branch #{id} canceling predictive merge requests with reason #{reject_reason}; predictive branch data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]")
       predictive_merge_requests.waiting.each do |pmr|
         pmr.cancel(comment_msg(reject_reason))
       end
     end
 
     def reject_predictive_merge_requests(reject_reason)
+      Rails.logger.info("Predictive branch #{id} rejecting predictive merge requests with reason #{reject_reason}; predictive branch data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]˝")
       predictive_merge_requests.waiting.each do |pmr|
         pmr.reject(comment_msg(reject_reason))
       end
@@ -218,7 +220,6 @@ module Shipit
         failed_branches << p_build_branch if p_build_branch.failed?
       end
       if failed_branches.empty?
-        Rails.logger.info("Predictive branch #{id} additional_failed_information - No failed branches; predictive branch data: #{self.to_json}")
         return "Something went wrong, please start over."
       end
       res = []
