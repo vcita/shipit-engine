@@ -42,7 +42,7 @@ module Shipit
     def abort!(signal: 'TERM')
       pid = @task.pid
       if pid
-        @task.write("$ kill #{pid}\n")˝
+        @task.write("$ kill #{pid}\n")
         Process.kill(signal, pid)
       else
         @task.write("Can't abort, no recorded pid, WTF?\n")
