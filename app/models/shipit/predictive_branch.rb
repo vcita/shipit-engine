@@ -199,12 +199,14 @@ module Shipit
     end
 
     def cancel_predictive_merge_requests(reject_reason = nil)
+      Rails.logger.info("Predictive branch #{id} canceling predictive merge requests with reason #{reject_reason}; predictive branch data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]")
       predictive_merge_requests.waiting.each do |pmr|
         pmr.cancel(comment_msg(reject_reason))
       end
     end
 
     def reject_predictive_merge_requests(reject_reason)
+      Rails.logger.info("Predictive branch #{id} rejecting predictive merge requests with reason #{reject_reason}; predictive branch data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]˝")
       predictive_merge_requests.waiting.each do |pmr|
         pmr.reject(comment_msg(reject_reason))
       end
@@ -217,7 +219,9 @@ module Shipit
       predictive_build.predictive_branches.each do |p_build_branch|
         failed_branches << p_build_branch if p_build_branch.failed?
       end
-      return "Something went wrong, please start over." if failed_branches.empty?
+      if failed_branches.empty?
+        return "Something went wrong, please start over."
+      end
       res = []
       res << "We had to start over, we failed to process your request due to CI failures of the following projects: "
       failed_branches.each do |fb|
