@@ -5,6 +5,17 @@ module Shipit
     on_duplicate :drop
     queue_as :pipeline
 
+    # Setup (clone + merge) runs up to ~75s in production, far over the 10s
+    # default lock TTL — an expired lock lets the next cron tick cancel a build
+    # that is still being set up. Not using `timeout` on purpose: it would also
+    # hard-kill perform, risking a partial multi-repo push during merge_build.
+    self.lock_expiration = 100.seconds.to_i
+
+    # A build stays :pending while generate_predictive_build clones and merges
+    # (observed max ~75s). Only treat it as broken once it has clearly outlived
+    # that phase, e.g. the worker died mid-setup.
+    PENDING_GRACE_PERIOD = 5.minutes
+
     def lock_key(*args)
       ActiveJob::Arguments.serialize([self.class.name,args.first.id]).join('-')
     end
@@ -35,6 +46,8 @@ module Shipit
 
       case predictive_build.status.to_sym
       when :pending # Something went wrong
+        return true if predictive_build.created_at > PENDING_GRACE_PERIOD.ago
+        Rails.logger.error("Predictive build #{predictive_build.id} stuck in pending for over #{PENDING_GRACE_PERIOD.inspect}, canceling")
         predictive_build.cancel
         predictive_build.aborting_tasks(true, PredictiveBranch::PIPELINE_TASKS_FAILED)
       when :branched, :tasks_running

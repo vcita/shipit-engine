@@ -10,6 +10,8 @@ module Shipit
       included do
         around_perform { |job, block| job.acquire_lock(&block) }
         cattr_accessor :lock_timeout
+        # Lock TTL override, decoupled from `timeout` which also hard-kills perform.
+        cattr_accessor :lock_expiration
         on_duplicate :retry
       end
 
@@ -17,7 +19,7 @@ module Shipit
         mutex = Redis::Lock.new(
           lock_key(*arguments),
           Shipit.redis,
-          expiration: self.class.timeout || DEFAULT_TIMEOUT,
+          expiration: self.class.lock_expiration || self.class.timeout || DEFAULT_TIMEOUT,
           timeout: self.class.lock_timeout || 0,
         )
         mutex.lock(&block)
