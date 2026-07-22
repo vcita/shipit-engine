@@ -2,6 +2,7 @@
 
 module Shipit
   class PredictiveBuild < Record
+    include VerifyPollStrikes
     belongs_to :pipeline
     has_many :predictive_build_tasks
     has_many :predictive_branches
@@ -200,7 +201,17 @@ module Shipit
         Shipit.redis.del(pipeline_tasks_cache_key) if Shipit.redis.get(pipeline_tasks_cache_key).present?
       end
 
-      return pipeline_task_failed unless [:success, :pending, :running].include? pipeline_task_status
+      unless [:success, :pending, :running].include? pipeline_task_status
+        return pipeline_task_failed unless predictive_task_type == :verify
+        # A verify task is an idempotent status poll: losing one (worker died,
+        # reaped as zombie, transient error) says nothing about the CI itself —
+        # real CI failures arrive via successful polls reporting :aborted below.
+        # Tolerate a few dead polls; the next cron tick re-polls anyway.
+        return pipeline_task_failed if verify_poll_strikes_exhausted?
+        Rails.logger.warn("Predictive build #{id}: verify task #{task.id} ended #{pipeline_task_status}, keeping CI status and waiting for next poll")
+        return
+      end
+      clear_verify_poll_strikes if predictive_task_type == :verify
 
       if predictive_task_type == :run
         ci_pipeline_running       if pipeline_task_status == :running || pipeline_task_status == :pending
