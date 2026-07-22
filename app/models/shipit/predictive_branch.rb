@@ -231,7 +231,11 @@ module Shipit
         failed_branches << p_build_branch if p_build_branch.failed?
       end
       if failed_branches.empty?
-        return "Something went wrong, please start over."
+        # No project's CI actually failed: the run was torn down by an
+        # infrastructure problem (shipit restarted mid-run, CI tasks lost).
+        return "CI #{predictive_build.id} was interrupted before any project's CI failed — " \
+          "this points to a shipit infrastructure hiccup, not to your code.\n" \
+          "Please comment `/shipit` to re-enqueue this PR."
       end
       res = []
       res << "We had to start over, we failed to process your request due to CI failures of the following projects: "
