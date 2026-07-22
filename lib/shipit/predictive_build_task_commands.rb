@@ -49,27 +49,10 @@ module Shipit
       end
     end
 
-    def fetch(predictive_build)
-      if Dir.exist?(@task.working_directory)
-        git('fetch', 'origin', '--tags', predictive_build.branch, env: env, chdir: @task.working_directory).run!
-        checkout(nil).run!
-      else
-        create_directories
-        git('clone', '--recursive', '--branch', predictive_build.branch, @stack.repo_git_url,
-            '.', chdir: @task.working_directory, env: env).run!
-      end
-    end
-
-    def create_directories
-      FileUtils.mkdir_p(@task.working_directory)
-    end
+    include PredictiveGitFetch
 
     def install_dependencies
       []
-    end
-
-    def checkout(commit)
-      git('checkout', '-b', @task.predictive_build.branch, chdir: @task.working_directory)
     end
   end
 end
