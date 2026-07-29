@@ -2,6 +2,7 @@
 
 module Shipit
   class PredictiveBranch < Record
+    include VerifyPollStrikes
     belongs_to :predictive_build
     belongs_to :stack
     has_many :predictive_branch_tasks
@@ -112,8 +113,18 @@ module Shipit
 
       unless [:success, :pending, :running].include? task_status
         return run_task_failed(task) if predictive_task_type == :run
+        # Verify tasks are idempotent status polls — a dead/errored poll says
+        # nothing about the CI itself (real failures arrive via successful
+        # polls reporting :aborted below). Tolerate a few strikes; the next
+        # cron tick re-polls anyway.
+        if predictive_task_type == :verify
+          return task_failed if verify_poll_strike! > MAX_VERIFY_POLL_STRIKES
+          Rails.logger.warn("Predictive branch #{id}: verify task #{task.id} ended #{task_status}, keeping status and waiting for next poll")
+          return
+        end
         return task_failed
       end
+      clear_verify_poll_strikes if predictive_task_type == :verify
 
 
       if predictive_task_type == :run
