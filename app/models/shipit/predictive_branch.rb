@@ -118,7 +118,7 @@ module Shipit
         # polls reporting :aborted below). Tolerate a few strikes; the next
         # cron tick re-polls anyway.
         if predictive_task_type == :verify
-          return task_failed if verify_poll_strikes_exhausted?
+          return task_failed if verify_poll_strike! > MAX_VERIFY_POLL_STRIKES
           Rails.logger.warn("Predictive branch #{id}: verify task #{task.id} ended #{task_status}, keeping status and waiting for next poll")
           return
         end

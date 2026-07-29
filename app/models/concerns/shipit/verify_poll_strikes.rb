@@ -15,10 +15,11 @@ module Shipit
       "#{self.class.name}::verify_poll_strikes_#{id}"
     end
 
-    def verify_poll_strikes_exhausted?
+    # Records one failed poll and returns the new consecutive-failure count.
+    def verify_poll_strike!
       strikes = Shipit.redis.incr(verify_poll_strikes_key)
       Shipit.redis.expire(verify_poll_strikes_key, 1.day.to_i)
-      strikes > MAX_VERIFY_POLL_STRIKES
+      strikes
     end
 
     def clear_verify_poll_strikes

@@ -207,7 +207,7 @@ module Shipit
         # reaped as zombie, transient error) says nothing about the CI itself —
         # real CI failures arrive via successful polls reporting :aborted below.
         # Tolerate a few dead polls; the next cron tick re-polls anyway.
-        return pipeline_task_failed if verify_poll_strikes_exhausted?
+        return pipeline_task_failed if verify_poll_strike! > MAX_VERIFY_POLL_STRIKES
         Rails.logger.warn("Predictive build #{id}: verify task #{task.id} ended #{pipeline_task_status}, keeping CI status and waiting for next poll")
         return
       end

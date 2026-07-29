@@ -1,4 +1,6 @@
 # frozen_string_literal: true
+require 'fileutils'
+
 module Shipit
   # Checkout for predictive build/branch tasks. Refreshes the stack's shared
   # git cache with the predictive branch (incremental fetch, seconds), then
@@ -16,6 +18,9 @@ module Shipit
             env: env, chdir: @stack.git_path).run!
       end
 
+      # A re-run of the same task would find a non-empty directory and fail
+      # the clone; start from a clean, task-private directory.
+      FileUtils.rm_rf(@task.working_directory)
       create_directories
       git('clone', '--recursive', '--origin', 'cache', @stack.git_path, '.',
           env: env, chdir: @task.working_directory).run!
