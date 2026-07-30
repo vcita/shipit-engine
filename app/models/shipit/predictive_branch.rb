@@ -113,18 +113,20 @@ module Shipit
 
       unless [:success, :pending, :running].include? task_status
         return run_task_failed(task) if predictive_task_type == :run
-        # Verify tasks are idempotent status polls — a dead/errored poll says
-        # nothing about the CI itself (real failures arrive via successful
-        # polls reporting :aborted below). Tolerate a few strikes; the next
-        # cron tick re-polls anyway.
-        if predictive_task_type == :verify
+        # Only a LOST poll (reaped as zombie => :error, hung => :timedout) is
+        # tolerated with strikes — it says nothing about the CI itself and the
+        # next cron tick re-polls anyway. A :failed poll is the script exiting
+        # non-zero on a real CI failure and must fail the run immediately.
+        if predictive_task_type == :verify && [:error, :timedout].include?(task_status)
           return task_failed if verify_poll_strike! > MAX_VERIFY_POLL_STRIKES
           Rails.logger.warn("Predictive branch #{id}: verify task #{task.id} ended #{task_status}, keeping status and waiting for next poll")
           return
         end
         return task_failed
       end
-      clear_verify_poll_strikes if predictive_task_type == :verify
+      # Only a completed successful poll proves the CI is healthy; a freshly
+      # created (:pending) task must not reset the consecutive-failure count.
+      clear_verify_poll_strikes if predictive_task_type == :verify && task_status == :success
 
 
       if predictive_task_type == :run
