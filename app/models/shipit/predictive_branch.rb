@@ -233,6 +233,17 @@ module Shipit
         failed_branches << p_build_branch if p_build_branch.failed?
       end
       if failed_branches.empty?
+        # No project's own CI failed. If the pipeline-level CI (e.g.
+        # common_automation) failed, say so instead of the generic message —
+        # otherwise developers retry blind on a real, reproducible failure.
+        if predictive_build.ci_pipeline_failed?
+          msg = ["Failed to process your request due to a pipeline CI failure, while your repository's own CI passed."]
+          predictive_build.ci_jobs_statuses.each do |job|
+            msg << "* #{job.name}: #{job.status} - #{job.link}"
+          end
+          msg << "This can be caused by your changes or by another PR in the same CI cycle. Check the failed job above, then `/shipit` again."
+          return msg.join("\n")
+        end
         return "Something went wrong, please start over."
       end
       res = []
