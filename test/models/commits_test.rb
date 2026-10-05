@@ -162,6 +162,30 @@ module Shipit
       assert_equal '63d7e03e517fd2ae1caeb1b7a9f21767f84d671a', commit.pull_request_head_sha
     end
 
+    test '.find_or_create_from_github_by_sha! returns the existing commit without calling GitHub' do
+      Shipit.github.api.expects(:commit).never
+
+      assert_equal @commit, @stack.commits.find_or_create_from_github_by_sha!('shopify/shipit-engine', @commit.sha)
+    end
+
+    test '.find_or_create_from_github_by_sha! returns the concurrent winner after losing the insert race' do
+      Shipit.github.api.stubs(:commit).returns(stub)
+      Commit.expects(:by_sha).with(@commit.sha).twice.returns(nil).then.returns(@commit)
+      Commit.expects(:create_from_github!).once.raises(ActiveRecord::RecordNotUnique)
+
+      assert_equal @commit, @stack.commits.find_or_create_from_github_by_sha!('shopify/shipit-engine', @commit.sha)
+    end
+
+    test '.find_or_create_from_github_by_sha! gives up instead of retrying forever' do
+      Shipit.github.api.stubs(:commit).returns(stub)
+      Commit.stubs(:by_sha).returns(nil)
+      Commit.expects(:create_from_github!).times(Commit::CREATE_RACE_ATTEMPTS).raises(ActiveRecord::RecordNotUnique)
+
+      assert_raises(ActiveRecord::RecordNotUnique) do
+        @stack.commits.find_or_create_from_github_by_sha!('shopify/shipit-engine', @commit.sha)
+      end
+    end
+
     test "#message= truncates the message" do
       skip unless Shipit::Commit.columns_hash['message'].limit
       limit = Shipit::Commit.columns_hash['message'].limit

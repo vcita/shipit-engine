@@ -389,14 +389,7 @@ module Shipit
     end
 
     def find_or_create_commit_from_github_by_sha!(sha, attributes)
-      if commit = stack.commits.by_sha(sha)
-        commit
-      else
-        github_commit = Shipit.github.api.commit(stack.github_repo_name, sha)
-        stack.commits.create_from_github!(github_commit, attributes)
-      end
-    rescue ActiveRecord::RecordNotUnique
-      retry
+      stack.commits.find_or_create_from_github_by_sha!(stack.github_repo_name, sha, attributes)
     end
   end
 end

@@ -4,6 +4,7 @@ module Shipit
     include DeferredTouch
 
     RECENT_COMMIT_THRESHOLD = 10.seconds
+    CREATE_RACE_ATTEMPTS = 3
 
     AmbiguousRevision = Class.new(StandardError)
 
@@ -87,6 +88,21 @@ module Shipit
 
     def self.by_sha!(sha)
       by_sha(sha) || raise(ActiveRecord::RecordNotFound, "Couldn't find commit with sha #{sha}")
+    end
+
+    def self.find_or_create_from_github_by_sha!(repo_name, sha, attributes = {})
+      attempts = 0
+      begin
+        by_sha(sha) || create_from_github!(Shipit.github.api.commit(repo_name, sha), attributes)
+      rescue ActiveRecord::RecordNotUnique
+        # The winner committed after our REPEATABLE READ snapshot; only a locking read sees its row.
+        commit = lock.by_sha(sha)
+        return commit if commit
+
+        attempts += 1
+        retry if attempts < CREATE_RACE_ATTEMPTS
+        raise
+      end
     end
 
     def self.from_github(commit)
