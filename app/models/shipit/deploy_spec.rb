@@ -91,7 +91,35 @@ module Shipit
     end
 
     def release_status_context
-      config('status', 'context')
+      raw = config('status', 'context')
+      return nil if raw.nil?
+      return raw if raw.is_a?(String)
+
+      coerced = case raw
+                when Symbol, Numeric, TrueClass, FalseClass
+                  raw.to_s
+                else
+                  JSON.dump(raw)
+                end
+
+      # #region agent log
+      if (log_path = ENV['SHIPIT_DEBUG_SESSION_LOG'])
+        begin
+          payload = {
+            sessionId: ENV.fetch('SHIPIT_DEBUG_SESSION_ID', '5468a8'),
+            hypothesisId: 'H1',
+            location: 'deploy_spec.rb:release_status_context',
+            message: 'coerced non-string status.context for GitHub commit status API',
+            data: { rawClass: raw.class.name, coercedLength: coerced.bytesize },
+            timestamp: (Time.now.to_f * 1000).to_i,
+          }
+          File.open(log_path, File::CREAT | File::WRONLY | File::APPEND) { |f| f.puts(JSON.generate(payload)) }
+        rescue StandardError
+        end
+      end
+      # #endregion
+
+      coerced
     end
 
     def release_status_delay

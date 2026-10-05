@@ -1122,5 +1122,30 @@ module Shipit
       stack = shipit_stacks(:shipit)
       assert_equal stack.cached_deploy_spec_before_type_cast, DeploySpec.dump(stack.cached_deploy_spec)
     end
+
+    test '#release_status_context returns string from config unchanged' do
+      spec = DeploySpec.load('{"status":{"context":"shipit/foo"}}')
+      assert_equal 'shipit/foo', spec.release_status_context
+    end
+
+    test '#release_status_context coerces Hash to JSON string (GitHub API requires string context)' do
+      spec = DeploySpec.load('{"status":{"context":{"label":"op","env":"prod"}}}')
+      assert_equal '{"label":"op","env":"prod"}', spec.release_status_context
+    end
+
+    test '#release_status_context coerces Array to JSON string' do
+      spec = DeploySpec.load('{"status":{"context":["shipit","lza"]}}')
+      assert_equal '["shipit","lza"]', spec.release_status_context
+    end
+
+    test '#release_status_context coerces Integer to string' do
+      spec = DeploySpec.load('{"status":{"context":42}}')
+      assert_equal '42', spec.release_status_context
+    end
+
+    test '#release_status_context returns nil when absent' do
+      spec = DeploySpec.load('{}')
+      assert_nil spec.release_status_context
+    end
   end
 end
