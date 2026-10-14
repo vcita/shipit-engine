@@ -3,6 +3,7 @@
 module Shipit
   class PredictiveBranch < Record
     include VerifyPollStrikes
+    include LostTaskReport
     belongs_to :predictive_build
     belongs_to :stack
     has_many :predictive_branch_tasks
@@ -178,6 +179,7 @@ module Shipit
     end
 
     def trigger_task(run_now = false)
+      replay_lost_run_report(predictive_branch_tasks) if tasks_running?
       predictive_task_type = new_task_type
       return unless predictive_task_type
       user = Shipit::CommandLineUser.new

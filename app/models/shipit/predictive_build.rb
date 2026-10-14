@@ -3,6 +3,7 @@
 module Shipit
   class PredictiveBuild < Record
     include VerifyPollStrikes
+    include LostTaskReport
     belongs_to :pipeline
     has_many :predictive_build_tasks
     has_many :predictive_branches
@@ -362,6 +363,7 @@ module Shipit
     end
 
     def trigger_pipeline_tasks(run_now = false)
+      replay_lost_run_report(predictive_build_tasks) if ci_pipeline_running?
       predictive_task_type = new_pipeline_task_type
       return unless predictive_task_type
       stack = predictive_branches.first.stack
