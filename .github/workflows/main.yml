@@ -1,6 +1,10 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  # Pull request branches run once, through the pull_request event.
+  push:
+    branches: [master]
+  pull_request:
 
 env:
   # libv8 and mini_racer only compile assets; Node.js serves ExecJS.
@@ -28,6 +32,7 @@ jobs:
       with:
         path: vendor/bundle
         key: bullseye-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+        restore-keys: bullseye-ruby-2.7-gems-
     # Not frozen: Gemfile.ci.lock still lists the two gems that Gemfile.ci leaves out.
     - run: |
         gem install bundler -v 2.1.4 --no-document
@@ -42,7 +47,11 @@ jobs:
           > added-lines.txt
         files=$(cut -d: -f1 added-lines.txt | sort -u)
         if [ -z "$files" ]; then echo "No Ruby lines added."; exit 0; fi
-        bundle _2.1.4_ exec rubocop --format emacs $files | sed "s#^$PWD/##" > offenses.txt || true
+        # Exit 1 means offenses were found; anything higher means rubocop did not run.
+        status=0
+        bundle _2.1.4_ exec rubocop --force-exclusion --format emacs $files > rubocop.out || status=$?
+        if [ "$status" -gt 1 ]; then cat rubocop.out; exit "$status"; fi
+        sed "s#^$PWD/##" rubocop.out > offenses.txt
         awk -F: 'NR==FNR{added[$1":"$2]=1; next} added[$1":"$2]' added-lines.txt offenses.txt > new-offenses.txt
         cat new-offenses.txt
         test ! -s new-offenses.txt
@@ -69,6 +78,7 @@ jobs:
       with:
         path: vendor/bundle
         key: bullseye-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+        restore-keys: bullseye-ruby-2.7-gems-
     - run: |
         gem install bundler -v 2.1.4 --no-document
         bundle _2.1.4_ install --jobs 4 --retry 3
