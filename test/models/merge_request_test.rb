@@ -53,6 +53,35 @@ module Shipit
       assert_equal original_merge_requested_at, @pr.merge_requested_at
     end
 
+    test "#cancel! wakes up the pipeline build" do
+      pipeline = Pipeline.create!(name: 'shipit-test', environment: 'production')
+      @stack.update_column(:pipeline_id, pipeline.id)
+
+      assert_enqueued_with(job: ProcessPipelineBuildJob, args: [pipeline]) do
+        @pr.cancel!
+      end
+    end
+
+    test ".request_merge! names the CI that still tests the pull request" do
+      build = put_in_build(status: :tasks_running)
+      @pr.cancel!
+
+      error = assert_raises(ArgumentError) { MergeRequest.request_merge!(@stack, @pr.number, @user) }
+
+      assert_match(/is still in CI #{build.id} \(tasks_running/, error.message)
+      assert_predicate @pr.reload, :canceled?
+    end
+
+    test ".request_merge! releases a pull request left over by a CI that ended" do
+      put_in_build(status: :failed)
+      @pr.cancel!
+
+      MergeRequest.request_merge!(@stack, @pr.number, @user)
+
+      assert_predicate @pr.reload, :pending?
+      assert_empty @pr.predictive_merge_request.waiting
+    end
+
     test ".extract_number can get a pull request number from different formats" do
       assert_equal 42, MergeRequest.extract_number(@stack, '42')
       assert_equal 42, MergeRequest.extract_number(@stack, '#42')
@@ -290,6 +319,24 @@ module Shipit
       spec = { 'merge' => { 'max_divergence' => { 'age' => '1h', 'commits' => 10 } } }
       @pr.stack.cached_deploy_spec = DeploySpec.new(spec)
       refute_predicate @pr, :stale?
+    end
+
+    private
+
+    def put_in_build(status:)
+      pipeline = Pipeline.create!(name: 'shipit-test', environment: 'production')
+      @stack.update_column(:pipeline_id, pipeline.id)
+      build = PredictiveBuild.create!(pipeline: pipeline, branch: 'PREDICTIVE-BRANCH-1')
+      build.public_send(status)
+      branch = PredictiveBranch.create!(
+        predictive_build: build,
+        branch: build.branch,
+        stack: @stack,
+        stack_commit: shipit_commits(:fifth),
+      )
+      PredictiveMergeRequest.create!(merge_request: @pr, predictive_branch: branch, head: @pr.head)
+      ProcessPipelineBuildJob.stubs(:perform_later)
+      build
     end
   end
 end

@@ -313,6 +313,28 @@ module Shipit
       end
     end
 
+    # Merge requests this build still tests that are no longer pending: canceled in the UI
+    # or the API, or canceled by MergeQueueHandler on a close or a push.
+    def merge_requests_left_queue
+      waiting_predictive_merge_requests.map(&:merge_request).reject(&:pending?).uniq
+    end
+
+    # A predictive merge request that was canceled or rejected while the build kept running.
+    def predictive_merge_requests_stopped?
+      PredictiveMergeRequest.where(predictive_branch: predictive_branches, status: %w(canceled rejected)).any?
+    end
+
+    # The predictive branches already contain the commits of these merge requests, so
+    # nothing in this build can merge. The other merge requests stay pending and run in the
+    # next build.
+    def stop_for_merge_requests_left_queue(merge_requests)
+      waiting_predictive_merge_requests.where(merge_request: merge_requests).each do |pmr|
+        pmr.cancel(pmr.predictive_branch.comment_msg(left_queue_reason(pmr)))
+      end
+      cancel
+      aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_LEFT_QUEUE)
+    end
+
     def build_message
       if status.in?(WIP_STATUSES)
         minutes = ((Time.now - created_at) / 60).to_i
@@ -409,5 +431,22 @@ module Shipit
       end
     end
 
+    private
+
+    def waiting_predictive_merge_requests
+      PredictiveMergeRequest.waiting.where(predictive_branch: predictive_branches)
+    end
+
+    def left_queue_reason(pmr)
+      merge_request = pmr.merge_request
+      begin
+        merge_request.refresh!
+      rescue StandardError => e
+        Rails.logger.warn("Predictive build #{id}: could not refresh merge request #{merge_request.id}: #{e.message}")
+      end
+      return PredictiveBranch::MR_CLOSED if merge_request.closed?
+      return PredictiveBranch::MR_NEW_COMMITS if merge_request.head_id != pmr.head_id
+      PredictiveBranch::MR_LEFT_QUEUE
+    end
   end
 end
