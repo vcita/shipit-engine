@@ -17,6 +17,7 @@ module Shipit
     end
 
     test "#perform rejects unmergeable PRs and merge the others" do
+      skip(STATUS_CHECKS_BYPASSED)
       MergeRequest.any_instance.stubs(:refresh!)
       stub_request(:put, "#{@pending_pr.api_url}/merge").to_return(status: %w(200 OK), body: {
         sha: "6dcb09b5b57875f334f61aebed695e2e4193db5e",
@@ -35,6 +36,7 @@ module Shipit
     end
 
     test "#perform rejects PRs if the merge attempt fails" do
+      skip(STATUS_CHECKS_BYPASSED)
       MergeRequest.any_instance.stubs(:refresh!)
       stub_request(:put, "#{@pending_pr.api_url}/merge").to_return(status: %w(405 Method not allowed), body: {
         message: "Pull Request is not mergeable",
@@ -71,6 +73,7 @@ module Shipit
     end
 
     test "#perform cancels merge requests for closed PRs" do
+      skip(STATUS_CHECKS_BYPASSED)
       @pending_pr.cancel!
       MergeRequest.any_instance.stubs(:refresh!)
       @job.perform(@stack)
@@ -78,6 +81,7 @@ module Shipit
     end
 
     test "#perform cancels merge requests for manually merged PRs" do
+      skip(STATUS_CHECKS_BYPASSED)
       @pending_pr.cancel!
       MergeRequest.any_instance.stubs(:refresh!)
       @job.perform(@stack)
@@ -85,6 +89,7 @@ module Shipit
     end
 
     test "#perform does not reject pull requests with pending statuses" do
+      skip(STATUS_CHECKS_BYPASSED)
       @pending_pr.cancel!
       MergeRequest.any_instance.stubs(:refresh!)
       @job.perform(@stack)

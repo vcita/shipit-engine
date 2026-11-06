@@ -26,8 +26,9 @@ module Shipit
     ENVIRONMENT_MAX_SIZE = 50
     REQUIRED_HOOKS = %i(push status).freeze
 
-    has_many :commits, dependent: :destroy
+    # Before commits: merge_requests.head_id and base_commit_id reference them.
     has_many :merge_requests, dependent: :destroy
+    has_many :commits, dependent: :destroy
     has_many :tasks, dependent: :destroy
     has_many :deploys
     has_many :rollbacks
@@ -97,9 +98,10 @@ module Shipit
     validates :lock_reason, length: { maximum: 4096 }
 
     validates :merge_queue_enabled, uniqueness: {
-        scope: %i(repository branch),
-        message: 'cannot be used more than once with this repository and branch. Check (archived) stacks.'
-    }
+      scope: %i(repository branch),
+      conditions: -> { where(merge_queue_enabled: true) },
+      message: 'cannot be used more than once with this repository and branch. Check (archived) stacks.',
+    }, if: :merge_queue_enabled?
 
     serialize :cached_deploy_spec, DeploySpec
     delegate(

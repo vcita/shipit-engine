@@ -351,7 +351,8 @@ module Shipit
 
     def check_for_retry
       begin
-        retry_if_necessary if status.in?(['failed', 'error', 'timedout'])
+        # Task already retries on :timedout; doing it here too queued two retries.
+        retry_if_necessary if status.in?(['failed', 'error'])
       rescue Exception => error
         puts "Shipit::Deploy#retry_if_necessary failed to check; status: #{status}; message: #{error.message}"
       end

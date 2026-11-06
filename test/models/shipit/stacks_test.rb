@@ -500,7 +500,7 @@ module Shipit
     test "#trigger_continuous_delivery bails out if the stack is deployable but was deployed too recently" do
       Hook.stubs(:emit) # TODO: Once on rails 5, use assert_no_enqueued_jobs(only: Shipit::PerformTaskJob)
 
-      @stack.tasks.delete_all
+      delete_tasks(@stack.tasks)
       deploy = @stack.trigger_deploy(shipit_commits(:first), AnonymousUser.new)
       deploy.run!
       deploy.complete!
@@ -519,7 +519,7 @@ module Shipit
     test "#trigger_continuous_delivery bails out if the commit was already unsuccessfully deployed" do
       Hook.stubs(:emit) # TODO: Once on rails 5, use assert_no_enqueued_jobs(only: Shipit::PerformTaskJob)
 
-      @stack.tasks.delete_all
+      delete_tasks(@stack.tasks)
 
       assert_predicate @stack, :deployable?
       refute_predicate @stack, :deployed_too_recently?
@@ -613,7 +613,7 @@ module Shipit
     end
 
     test "#trigger_continuous_delivery trigger a deploy if all conditions are met" do
-      @stack.tasks.delete_all
+      delete_tasks(@stack.tasks)
       assert_predicate @stack, :deployable?
       refute_predicate @stack, :deployed_too_recently?
 
@@ -623,7 +623,7 @@ module Shipit
     end
 
     test "#trigger_continuous_delivery use default env vars" do
-      @stack.tasks.delete_all
+      delete_tasks(@stack.tasks)
 
       deploy = @stack.trigger_continuous_delivery
       assert_equal({ 'SAFETY_DISABLED' => '0' }, deploy.env)
@@ -878,7 +878,7 @@ module Shipit
 
     test "#trigger_continuous_delivery sets delay if commit was pushed recently" do
       freeze_time do
-        @stack.tasks.delete_all
+        delete_tasks(@stack.tasks)
 
         commit = @stack.next_commit_to_deploy
         commit.touch(:created_at)
@@ -912,6 +912,8 @@ module Shipit
 
     test "#env includes the stack's environment" do
       expected_environment = {
+        'PIPELINE_NAME' => nil,
+        'PIPELINE_ID' => '',
         'ENVIRONMENT' => @stack.environment,
         'LAST_DEPLOYED_SHA' => @stack.last_deployed_commit.sha,
         'GITHUB_REPO_OWNER' => @stack.repository.owner,

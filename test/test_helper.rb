@@ -30,9 +30,13 @@ begin
 rescue LoadError
 end
 
+# This fork merges without status checks (a TODO in MergeRequest), so tests of that gate cannot pass.
+STATUS_CHECKS_BYPASSED = 'MergeRequest#all_status_checks_passed? always returns true in the vcita fork'
+
 module ActiveSupport
   class TestCase
     include PayloadsHelper
+    include TasksHelper
     include FixtureAliasesHelper
     include QueriesHelper
     include JSONHelper

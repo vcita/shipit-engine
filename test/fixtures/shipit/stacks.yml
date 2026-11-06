@@ -105,7 +105,7 @@ shipit_canaries:
   environment: "canaries"
   branch: master
   ignore_ci: false
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 3
   undeployed_commits_count: 1
   continuous_deployment: true
@@ -274,7 +274,7 @@ shipit_undeployed:
   environment: "undeployed"
   branch: master
   ignore_ci: true
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 2
   undeployed_commits_count: 6
   continuous_deployment: true
@@ -345,7 +345,7 @@ shipit_single:
   environment: "single"
   branch: master
   ignore_ci: false
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 2
   undeployed_commits_count: 1
   cached_deploy_spec: >
@@ -382,7 +382,7 @@ shipit_stats:
   environment: "stats"
   branch: master
   ignore_ci: false
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 4
   undeployed_commits_count: 1
   cached_deploy_spec: >
@@ -419,7 +419,7 @@ shipit_task_no_commits:
   environment: "task_no_commits"
   branch: master
   ignore_ci: true
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 1
   undeployed_commits_count: 1
   continuous_deployment: true
@@ -488,7 +488,7 @@ review_stack:
   branch: master
   deploy_url: https://shipit.shopify.com
   ignore_ci: false
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 8
   undeployed_commits_count: 2
   cached_deploy_spec: |-
@@ -590,7 +590,7 @@ archived_25hours_ago:
   environment: archived_25hours_ago
   branch: master
   ignore_ci: true
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 8
   undeployed_commits_count: 2
   cached_deploy_spec: "{}"
@@ -604,7 +604,7 @@ archived_6hours_ago:
   environment: archived_6hours_ago
   branch: master
   ignore_ci: true
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 8
   undeployed_commits_count: 2
   cached_deploy_spec: "{}"
@@ -618,7 +618,7 @@ archived_30minutes_ago:
   environment: archived_30minutes_ago
   branch: master
   ignore_ci: true
-  merge_queue_enabled: true
+  merge_queue_enabled: false
   tasks_count: 8
   undeployed_commits_count: 2
   cached_deploy_spec: "{}"
