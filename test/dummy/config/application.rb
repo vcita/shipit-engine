@@ -18,6 +18,8 @@ end
 module Shipit
   class Application < Rails::Application
     config.load_defaults 6.0
+    # db:schema:load records only the migrations it can see, and test_helper checks the engine ones.
+    config.paths['db/migrate'] << File.expand_path('../../../db/migrate', __dir__)
   end
 end
 
