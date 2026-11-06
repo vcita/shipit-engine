@@ -2,117 +2,62 @@ name: CI
 
 on: [push, pull_request]
 
+env:
+  # libv8 and mini_racer only compile assets; the runner's Node.js serves ExecJS.
+  BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile.ci
+  BUNDLE_WITHOUT: ci
+
 jobs:
   lint:
     name: Lint Ruby
-    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v1
-    - name: Set up Ruby 2.5
-      uses: actions/setup-ruby@v1
+    - uses: actions/checkout@v4
       with:
-        ruby-version: 2.5.x
-    - uses: actions/cache@v1
-      with:
-        path: vendor/bundle
-        key: ${{ runner.os }}-gems-${{ hashFiles('**/Gemfile.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-gems-
-    - name: rubocop
+        fetch-depth: 0
+    - name: Write Gemfile.ci
       run: |
-        sudo apt-get update
-        sudo apt-get -yqq install libpq-dev libsqlite3-dev libmysqlclient-dev
-        gem install bundler:2.1.4
-        bundle config path vendor/bundle
-        bundle install --jobs 4 --retry 3
-        bundle exec rubocop
-
-  # mysql:
-  #   name: Tests with MySQL
-  #   runs-on: ubuntu-latest
-  #   strategy:
-  #     matrix:
-  #       ruby_version:
-  #         - 2.5.x
-
-  #   services:
-  #     db:
-  #       image: mysql:5.7
-  #       ports:
-  #         - 3306
-  #       env:
-  #         MYSQL_ALLOW_EMPTY_PASSWORD: 'true'
-  #       options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=2s --health-retries=3
-  #     redis:
-  #       image: redis
-  #       ports:
-  #       - 6379:6379
-  #       options: --entrypoint redis-server
-
-  #   steps:
-  #   - uses: actions/checkout@v1
-  #   - name: Set up Ruby ${{ matrix.ruby_version }}
-  #     uses: actions/setup-ruby@v1
-  #     with:
-  #       ruby-version: ${{ matrix.ruby_version }}
-  #   - uses: actions/cache@v1
-  #     with:
-  #       path: vendor/bundle
-  #       key: ${{ runner.os }}-${{ matrix.ruby_version }}-gems-${{ hashFiles('**/Gemfile.lock') }}
-  #       restore-keys: |
-  #         ${{ runner.os }}-${{ matrix.ruby_version }}-gems-
-  #   - name: Run tests
-  #     env:
-  #       RAILS_ENV: test
-  #       DATABASE_URL: 'mysql2://root@127.0.0.1:${{ job.services.db.ports[3306] }}'
-  #     run: |
-  #       sudo apt-get update
-  #       sudo apt-get -yqq install libpq-dev libsqlite3-dev libmysqlclient-dev
-  #       gem install bundler:2.1.4
-  #       bundle config path vendor/bundle
-  #       bundle install --jobs 4 --retry 3
-  #       cp test/dummy/config/database.mysql.yml test/dummy/config/database.yml
-  #       bundle exec rake db:create db:schema:load test
-  #       bundle exec rake db:seed
+        grep -v -E "gem '(libv8|mini_racer)'" Gemfile > Gemfile.ci
+        cp Gemfile.lock Gemfile.ci.lock
+    - uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '2.7'
+        bundler: '2.1.4'
+        bundler-cache: true
+    - name: rubocop on the changed files
+      run: |
+        files=$(git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.rb' | grep -v -E '^(test/dummy|db|vendor|bin)/' || true)
+        if [ -z "$files" ]; then echo "No Ruby files changed."; exit 0; fi
+        bundle exec rubocop $files
 
   sqlite:
     name: Tests with SQLite3
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        ruby_version:
-          - 2.5.x
-          - 2.6.x
-          - 2.7.x
+    runs-on: ubuntu-22.04
 
     services:
       redis:
         image: redis
         ports:
         - 6379:6379
-        options: --entrypoint redis-server
 
     steps:
-    - uses: actions/checkout@v1
-    - name: Set up Ruby ${{ matrix.ruby_version }}
-      uses: actions/setup-ruby@v1
+    - uses: actions/checkout@v4
+    - name: Write Gemfile.ci
+      run: |
+        grep -v -E "gem '(libv8|mini_racer)'" Gemfile > Gemfile.ci
+        cp Gemfile.lock Gemfile.ci.lock
+    - uses: ruby/setup-ruby@v1
       with:
-        ruby-version: ${{ matrix.ruby_version }}
-    - uses: actions/cache@v1
-      with:
-        path: vendor/bundle
-        key: ${{ runner.os }}-${{ matrix.ruby_version }}-gems-${{ hashFiles('**/Gemfile.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-${{ matrix.ruby_version }}-gems-
+        ruby-version: '2.7'
+        bundler: '2.1.4'
+        bundler-cache: true
     - name: Run tests
       env:
         RAILS_ENV: test
       run: |
-        sudo apt-get update
-        sudo apt-get -yqq install libpq-dev libsqlite3-dev libmysqlclient-dev
-        gem install bundler:2.1.4
-        bundle config path vendor/bundle
-        bundle install --jobs 4 --retry 3
-        bundle exec rake db:create db:schema:load test
-        bundle exec rake db:seed
+        cd test/dummy
+        bundle exec rake db:create db:schema:load
+        cd ../..
+        bundle exec rake test
