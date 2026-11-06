@@ -32,12 +32,20 @@ jobs:
     - run: |
         gem install bundler -v 2.1.4 --no-document
         bundle _2.1.4_ install --jobs 4 --retry 3
-    - name: rubocop on the changed files
+    # Only offenses on lines this pull request adds: many files still have old offenses.
+    - name: rubocop on the added lines
       run: |
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        files=$(git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.rb' | grep -v -E '^(test/dummy|db|vendor|bin)/' || true)
-        if [ -z "$files" ]; then echo "No Ruby files changed."; exit 0; fi
-        bundle _2.1.4_ exec rubocop $files
+        git diff -U0 --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.rb' \
+          ':!test/dummy' ':!db' ':!vendor' ':!bin' \
+          | awk '/^\+\+\+ b\//{f=substr($2,3)} /^@@/{split($3,a,","); s=substr(a[1],2); n=(a[2]==""?1:a[2]); for(i=s;i<s+n;i++) print f":"i}' \
+          > added-lines.txt
+        files=$(cut -d: -f1 added-lines.txt | sort -u)
+        if [ -z "$files" ]; then echo "No Ruby lines added."; exit 0; fi
+        bundle _2.1.4_ exec rubocop --format emacs $files | sed "s#^$PWD/##" > offenses.txt || true
+        awk -F: 'NR==FNR{added[$1":"$2]=1; next} added[$1":"$2]' added-lines.txt offenses.txt > new-offenses.txt
+        cat new-offenses.txt
+        test ! -s new-offenses.txt
 
   sqlite:
     name: Tests with SQLite3
