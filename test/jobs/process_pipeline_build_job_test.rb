@@ -26,6 +26,7 @@ module Shipit
       MergeRequest.any_instance.stubs(:refresh!)
       MergeRequest.any_instance.stubs(:set_comment)
       PredictiveBranch.any_instance.stubs(:trigger_task)
+      PredictiveBranch.any_instance.stubs(:target_branch_moved?).returns(false)
     end
 
     test "#perform stops the build when a pull request in it is canceled" do
@@ -91,11 +92,63 @@ module Shipit
       assert_predicate @first_pmr.reload, :pending?
     end
 
+    test "#perform stops the build when the target branch moved and keeps its pull requests first in the queue" do
+      PredictiveBranch.any_instance.stubs(:target_branch_moved?).returns(true)
+      PredictiveBuild.any_instance.expects(:trigger_pipeline_tasks).with(true)
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/New commits landed on master/)).twice
+      requested_at = [@first.merge_requested_at, @second.merge_requested_at]
+
+      @job.perform(@pipeline)
+
+      assert_predicate @build.reload, :canceled?
+      assert_predicate @first_pmr.reload, :canceled?
+      assert_predicate @second_pmr.reload, :canceled?
+      assert_predicate @first.reload, :pending?
+      assert_predicate @second.reload, :pending?
+      assert_equal requested_at, [@first.merge_requested_at, @second.merge_requested_at]
+    end
+
+    test "#commits_validation names a push to the pull request, not a push to the target branch" do
+      @build.tasks_completed
+      @first.update!(head: shipit_commits(:first))
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/New commits were pushed/)).once
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/another pull request in it left/)).once
+
+      @job.commits_validation(@build)
+
+      assert_predicate @build.reload, :canceled?
+      assert_predicate @first.reload, :canceled?
+      assert_predicate @second.reload, :pending?
+    end
+
+    test "#merge_build puts the pull requests back in the queue when the fast-forward fails on a moved target" do
+      @build.waiting_for_merging
+      build = @build
+      @job.define_singleton_method(:merge_predictive_branches) do |_predictive_build, _dir|
+        build.merging_failed
+        {}
+      end
+      PredictiveBuild.any_instance.stubs(:target_branch_moved?).returns(false).then.returns(true)
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+      @job.expects(:push_build).never
+
+      @job.merge_build(@build)
+
+      assert_predicate @build.reload, :canceled?
+      assert_predicate @first_pmr.reload, :canceled?
+      assert_predicate @first.reload, :pending?
+      assert_predicate @second.reload, :pending?
+    end
+
     test "#merge_build does not push when a pull request left the queue during the merge" do
       @build.waiting_for_merging
-      @job.stubs(:merge_predictive_branches).returns({})
+      first = @first
+      @job.define_singleton_method(:merge_predictive_branches) do |_predictive_build, _dir|
+        first.cancel!
+        {}
+      end
       PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
-      @first.cancel!
       @job.expects(:push_build).never
 
       @job.merge_build(@build)

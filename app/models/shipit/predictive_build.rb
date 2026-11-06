@@ -335,6 +335,17 @@ module Shipit
       aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_LEFT_QUEUE)
     end
 
+    def target_branch_moved?
+      predictive_branches.any?(&:target_branch_moved?)
+    end
+
+    # The gate tested the old base, so nothing in this build can merge. The merge requests
+    # stay pending with their request time, so the next build takes them first.
+    def stop_for_target_branch_moved
+      cancel
+      aborting_tasks(false, PredictiveBranch::TARGET_BRANCH_MOVED)
+    end
+
     def build_message
       if status.in?(WIP_STATUSES)
         minutes = ((Time.now - created_at) / 60).to_i
