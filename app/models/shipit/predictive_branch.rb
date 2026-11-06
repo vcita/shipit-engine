@@ -24,6 +24,7 @@ module Shipit
     MR_CLOSED = 'mr_closed'
     MR_NEW_COMMITS = 'mr_new_commits'
     CANCELED_DUE_TO_LEFT_QUEUE = 'canceled_due_to_left_queue'
+    TARGET_BRANCH_MOVED = 'target_branch_moved'
 
     REJECTION_OPTIONS = %w(stack_tasks_failed pipeline_tasks_failed merged_failed).freeze
     WAITING_STATUSES = %w(pending).freeze
@@ -284,6 +285,10 @@ module Shipit
       when CANCELED_DUE_TO_LEFT_QUEUE
         msg = "Shipit stopped CI #{predictive_build.id} because another pull request in it left the merge queue. " \
               "This pull request stays in the queue and runs in the next CI."
+      when TARGET_BRANCH_MOVED
+        msg = "New commits landed on #{stack.branch} while CI #{predictive_build.id} ran, so Shipit stopped that CI. " \
+              "This pull request stays at the head of the merge queue and runs again on the new #{stack.branch}. " \
+              "You do not need to comment `/shipit` again."
       else
         return false
       end
@@ -314,6 +319,16 @@ module Shipit
       rescue Exception => e
         Rails.logger.error "Can't delete branch. message: #{e.message}"
       end
+    end
+
+    # The stack branch has commits that this predictive branch does not have, for example a
+    # merge with the GitHub merge button during the CI. Uses git, not the commits table,
+    # because that table can lag behind GitHub.
+    def target_branch_moved?
+      Shipit.github.api.compare(stack.github_repo_name, stack.branch, branch).behind_by.to_i > 0
+    rescue Octokit::Error => e
+      Rails.logger.warn("Predictive branch #{id}: could not compare #{branch} with #{stack.branch}: #{e.message}")
+      false
     end
 
     def set_comment_to_related_merge_requests(msg)
