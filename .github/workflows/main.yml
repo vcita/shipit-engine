@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 env:
-  # libv8 and mini_racer only compile assets; the runner's Node.js serves ExecJS.
+  # libv8 and mini_racer only compile assets; Node.js serves ExecJS.
   BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile.ci
   BUNDLE_WITHOUT: ci
   BUNDLE_PATH: vendor/bundle
@@ -12,7 +12,9 @@ jobs:
   lint:
     name: Lint Ruby
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    # nokogiri 1.10 does not build on glibc 2.35+ (Ubuntu 22.04 and later); bullseye has 2.31.
+    container: ruby:2.7-bullseye
 
     steps:
     - uses: actions/checkout@v4
@@ -22,52 +24,52 @@ jobs:
       run: |
         grep -v -E "gem '(libv8|mini_racer)'" Gemfile > Gemfile.ci
         cp Gemfile.lock Gemfile.ci.lock
-    - uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: '2.7'
-        bundler: '2.1.4'
     - uses: actions/cache@v4
       with:
         path: vendor/bundle
-        key: ${{ runner.os }}-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+        key: bullseye-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
     # Not frozen: Gemfile.ci.lock still lists the two gems that Gemfile.ci leaves out.
-    - run: bundle install --jobs 4 --retry 3
+    - run: |
+        gem install bundler -v 2.1.4 --no-document
+        bundle _2.1.4_ install --jobs 4 --retry 3
     - name: rubocop on the changed files
       run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
         files=$(git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.rb' | grep -v -E '^(test/dummy|db|vendor|bin)/' || true)
         if [ -z "$files" ]; then echo "No Ruby files changed."; exit 0; fi
-        bundle exec rubocop $files
+        bundle _2.1.4_ exec rubocop $files
 
   sqlite:
     name: Tests with SQLite3
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container: ruby:2.7-bullseye
 
     services:
       redis:
         image: redis
-        ports:
-        - 6379:6379
 
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '18'
     - name: Write Gemfile.ci
       run: |
         grep -v -E "gem '(libv8|mini_racer)'" Gemfile > Gemfile.ci
         cp Gemfile.lock Gemfile.ci.lock
-    - uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: '2.7'
-        bundler: '2.1.4'
     - uses: actions/cache@v4
       with:
         path: vendor/bundle
-        key: ${{ runner.os }}-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
-    - run: bundle install --jobs 4 --retry 3
+        key: bullseye-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+    - run: |
+        gem install bundler -v 2.1.4 --no-document
+        bundle _2.1.4_ install --jobs 4 --retry 3
     - name: Run tests
       env:
         RAILS_ENV: test
+        REDIS_URL: redis://redis:6379/7
       run: |
         cd test/dummy
-        bundle exec rake db:create db:schema:load
+        bundle _2.1.4_ exec rake db:create db:schema:load
         cd ../..
-        bundle exec rake test
+        bundle _2.1.4_ exec rake test
