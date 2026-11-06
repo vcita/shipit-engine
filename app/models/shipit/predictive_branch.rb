@@ -25,6 +25,7 @@ module Shipit
     MR_NEW_COMMITS = 'mr_new_commits'
     CANCELED_DUE_TO_LEFT_QUEUE = 'canceled_due_to_left_queue'
     TARGET_BRANCH_MOVED = 'target_branch_moved'
+    MR_LEFT_QUEUE_DURING_MERGE = 'mr_left_queue_during_merge'
 
     REJECTION_OPTIONS = %w(stack_tasks_failed pipeline_tasks_failed merged_failed).freeze
     WAITING_STATUSES = %w(pending).freeze
@@ -289,6 +290,10 @@ module Shipit
         msg = "New commits landed on #{stack.branch} while CI #{predictive_build.id} ran, so Shipit stopped that CI. " \
               "This pull request stays at the head of the merge queue and runs again on the new #{stack.branch}. " \
               "You do not need to comment `/shipit` again."
+      when MR_LEFT_QUEUE_DURING_MERGE
+        msg = "This pull request left the merge queue while Shipit merged CI #{predictive_build.id}. " \
+              "Shipit had already pushed the commits that the CI tested to #{stack.branch}. " \
+              "Commits pushed after that are not merged."
       else
         return false
       end
@@ -300,8 +305,13 @@ module Shipit
     def update_completed_requests
       predictive_merge_requests.waiting.each do |pmr|
         # delete_closed_branch(pmr.merge_request.stack.github_repo_name, pmr.merge_request.branch)
-        pmr.merge_request.complete!
-        pmr.merge(comment_msg(MR_MERGED_TO_PREDICTIVE))
+        # A cancel does not take the pipeline lock, so it can come after the last check, during the push.
+        if pmr.merge_request.can_complete?
+          pmr.merge_request.complete!
+          pmr.merge(comment_msg(MR_MERGED_TO_PREDICTIVE))
+        else
+          pmr.merge(comment_msg(MR_LEFT_QUEUE_DURING_MERGE))
+        end
       end
       # delete_closed_branch(stack.github_repo_name, branch)
 
@@ -326,7 +336,7 @@ module Shipit
     # because that table can lag behind GitHub.
     def target_branch_moved?
       Shipit.github.api.compare(stack.github_repo_name, stack.branch, branch).behind_by.to_i > 0
-    rescue Octokit::Error => e
+    rescue Octokit::Error, Faraday::Error => e
       Rails.logger.warn("Predictive branch #{id}: could not compare #{branch} with #{stack.branch}: #{e.message}")
       false
     end

@@ -58,8 +58,6 @@ module Shipit
         run_tasks(predictive_build)
       when :tasks_completed, :waiting_for_merging
         merging_process(predictive_build)
-      when :failed_commits_validation
-        predictive_build.failed
       end
     end
 
