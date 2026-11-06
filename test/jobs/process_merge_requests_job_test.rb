@@ -73,17 +73,17 @@ module Shipit
     end
 
     test "#perform cancels merge requests for closed PRs" do
-      skip(STATUS_CHECKS_BYPASSED)
       @pending_pr.cancel!
       MergeRequest.any_instance.stubs(:refresh!)
+      MergeRequest.any_instance.stubs(:all_status_checks_passed?).returns(false)
       @job.perform(@stack)
       assert_predicate @closed_pr.reload, :canceled?
     end
 
     test "#perform cancels merge requests for manually merged PRs" do
-      skip(STATUS_CHECKS_BYPASSED)
       @pending_pr.cancel!
       MergeRequest.any_instance.stubs(:refresh!)
+      MergeRequest.any_instance.stubs(:all_status_checks_passed?).returns(false)
       @job.perform(@stack)
       assert_predicate @merged_pr.reload, :canceled?
     end

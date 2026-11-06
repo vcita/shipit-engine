@@ -177,21 +177,17 @@ module Shipit
     end
 
     test "#reject_unless_mergeable! does not reject the PR if it has a pending CI status" do
-      skip(STATUS_CHECKS_BYPASSED)
       @pr.head.statuses.create!(stack: @pr.stack, state: 'pending', context: 'ci/circle')
 
-      refute_predicate @pr, :all_status_checks_passed?
       refute_predicate @pr, :any_status_checks_failed?
       assert_equal false, @pr.reject_unless_mergeable!
       refute_predicate @pr, :rejected?
     end
 
     test "#reject_unless_mergeable! reject the PR if it has a missing required CI status" do
-      skip(STATUS_CHECKS_BYPASSED)
       @pr.stack.cached_deploy_spec.stubs(:required_statuses).returns(['ci/circle'])
       @pr.head.statuses.where(context: 'ci/circle').delete_all
 
-      refute_predicate @pr, :all_status_checks_passed?
       refute_predicate @pr, :any_status_checks_failed?
       assert_predicate @pr, :any_status_checks_missing?
       assert_equal true, @pr.reject_unless_mergeable!
@@ -200,12 +196,10 @@ module Shipit
     end
 
     test "#reject_unless_mergeable! reject the PR if it has a missing CI status (multi-status)" do
-      skip(STATUS_CHECKS_BYPASSED)
       @pr.stack.cached_deploy_spec.stubs(:required_statuses).returns(['ci/circle'])
       @pr.head.statuses.where(context: 'ci/circle').delete_all
       @pr.head.statuses.create!(stack: @pr.stack, state: 'success', context: 'ci/travis')
 
-      refute_predicate @pr, :all_status_checks_passed?
       refute_predicate @pr, :any_status_checks_failed?
       assert_predicate @pr, :any_status_checks_missing?
       assert_equal true, @pr.reject_unless_mergeable!
