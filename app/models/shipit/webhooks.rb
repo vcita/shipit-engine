@@ -14,6 +14,7 @@ module Shipit
             Handlers::PullRequest::LabeledHandler,
             Handlers::PullRequest::UnlabeledHandler,
             Handlers::PullRequest::LabelCapturingHandler,
+            Handlers::PullRequest::MergeQueueHandler,
           ],
           'status' => [Handlers::StatusHandler],
           'membership' => [Handlers::MembershipHandler],

@@ -20,6 +20,10 @@ module Shipit
     MR_MERGED_TO_PREDICTIVE = 'mr_merged_to_predictive'
     CANCELED_DUE_TO_EMERGENCY = 'canceled_due_to_emergency'
     MR_STOPPED = 'mr_stopped'
+    MR_LEFT_QUEUE = 'mr_left_queue'
+    MR_CLOSED = 'mr_closed'
+    MR_NEW_COMMITS = 'mr_new_commits'
+    CANCELED_DUE_TO_LEFT_QUEUE = 'canceled_due_to_left_queue'
 
     REJECTION_OPTIONS = %w(stack_tasks_failed pipeline_tasks_failed merged_failed).freeze
     WAITING_STATUSES = %w(pending).freeze
@@ -267,6 +271,19 @@ module Shipit
         msg = "Pull request build attempt was canceled as part of branch '#{branch}' due to emergency build."
       when MR_STOPPED
         msg = "The pipeline process was stopped"
+      when MR_LEFT_QUEUE
+        msg = "This pull request left the merge queue, so Shipit stopped CI #{predictive_build.id}. " \
+              "Comment `/shipit` to add it again."
+      when MR_CLOSED
+        msg = "This pull request was closed, so Shipit stopped CI #{predictive_build.id} " \
+              "and removed it from the merge queue."
+      when MR_NEW_COMMITS
+        msg = "New commits were pushed while CI #{predictive_build.id} tested this pull request, " \
+              "so Shipit stopped that CI and removed the pull request from the merge queue. " \
+              "Comment `/shipit` to test the new commits."
+      when CANCELED_DUE_TO_LEFT_QUEUE
+        msg = "Shipit stopped CI #{predictive_build.id} because another pull request in it left the merge queue. " \
+              "This pull request stays in the queue and runs in the next CI."
       else
         return false
       end
