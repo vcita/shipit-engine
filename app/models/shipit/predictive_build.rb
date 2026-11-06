@@ -10,7 +10,7 @@ module Shipit
     has_many :ci_jobs_statuses
 
     WAITING_STATUSES = %w(pending).freeze
-    WIP_STATUSES = %w(pending branched tasks_running tasks_completed waiting_for_merging failed_commits_validation).freeze
+    WIP_STATUSES = %w(pending branched tasks_running tasks_completed waiting_for_merging).freeze
 
     state_machine :status, initial: :pending do
       state :pending

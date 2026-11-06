@@ -33,5 +33,11 @@ module Shipit
 
       refute_predicate @branch, :target_branch_moved?
     end
+
+    test "#target_branch_moved? is false when the compare times out" do
+      Shipit.github.api.stubs(:compare).raises(Faraday::TimeoutError)
+
+      refute_predicate @branch, :target_branch_moved?
+    end
   end
 end

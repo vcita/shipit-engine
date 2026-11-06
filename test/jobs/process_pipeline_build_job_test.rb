@@ -158,6 +158,23 @@ module Shipit
       assert_predicate @first.reload, :canceled?
     end
 
+    test "#merging_process completes the build when a pull request is canceled during the push" do
+      @build.waiting_for_merging
+      first = @first
+      @job.stubs(:merge_predictive_branches).returns({})
+      @job.define_singleton_method(:push_build) { |_predictive_build, _commands| first.cancel! }
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/left the merge queue while Shipit merged/)).once
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/merged to branch/)).once
+
+      @job.merging_process(@build)
+
+      assert_predicate @build.reload, :completed?
+      assert_predicate @first.reload, :canceled?
+      assert_predicate @first_pmr.reload, :merged?
+      assert_predicate @second.reload, :merged?
+      assert_predicate @second_pmr.reload, :merged?
+    end
+
     test "#merging_process does not merge a build with a canceled predictive merge request" do
       @build.tasks_completed
       @second_pmr.canceled
