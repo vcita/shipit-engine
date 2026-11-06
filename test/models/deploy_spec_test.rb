@@ -373,10 +373,8 @@ module Shipit
           },
         },
         'ci' => {
-          'hide' => [],
-          'allow_failures' => [],
-          'require' => [],
-          'blocking' => [],
+          'stack' => [],
+          'pipeline' => [],
         },
         'machine' => {
           'environment' => { 'BUNDLE_PATH' => @spec.bundle_path.to_s },

@@ -135,7 +135,7 @@ cyclimse_pending_merged:
   api_url: https://api.github.com/repos/shopify/cyclimse/pulls/66
   state: closed
   branch: feature-64
-  head_id: 8
+  head_id: 6
   mergeable: null
   additions: 23
   deletions: 43

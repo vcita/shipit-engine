@@ -26,8 +26,11 @@ module Shipit
     ENVIRONMENT_MAX_SIZE = 50
     REQUIRED_HOOKS = %i(push status).freeze
 
-    has_many :commits, dependent: :destroy
+    # Before the associations below: predictive rows reference merge requests, commits and tasks.
+    before_destroy :delete_predictive_records, prepend: true
+    # Before commits: merge_requests.head_id and base_commit_id reference them.
     has_many :merge_requests, dependent: :destroy
+    has_many :commits, dependent: :destroy
     has_many :tasks, dependent: :destroy
     has_many :deploys
     has_many :rollbacks
@@ -49,6 +52,18 @@ module Shipit
     deferred_touch repository: :updated_at
 
     default_scope { preload(:repository) }
+
+    # Predictive builds of a pipeline keep rows that reference this stack, its merge requests,
+    # commits and tasks. No association destroys them, so the foreign keys block a delete.
+    def delete_predictive_records
+      branch_ids = PredictiveBranch.where(stack_id: id).pluck(:id)
+      CiJobsStatus.where(predictive_branch_id: branch_ids).delete_all
+      PredictiveMergeRequest.where(predictive_branch_id: branch_ids)
+        .or(PredictiveMergeRequest.where(merge_request_id: merge_requests.select(:id)))
+        .delete_all
+      Task.delete_with_dependents(Task.where(predictive_branch_id: branch_ids).pluck(:id))
+      PredictiveBranch.where(id: branch_ids).delete_all
+    end
 
     def env
       {
@@ -97,9 +112,9 @@ module Shipit
     validates :lock_reason, length: { maximum: 4096 }
 
     validates :merge_queue_enabled, uniqueness: {
-        scope: %i(repository branch),
-        message: 'cannot be used more than once with this repository and branch. Check (archived) stacks.'
-    }
+      scope: %i(repository branch),
+      message: 'cannot be used more than once with this repository and branch. Check (archived) stacks.',
+    }, if: :merge_queue_enabled?
 
     serialize :cached_deploy_spec, DeploySpec
     delegate(
