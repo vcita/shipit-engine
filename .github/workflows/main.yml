@@ -6,6 +6,7 @@ env:
   # libv8 and mini_racer only compile assets; the runner's Node.js serves ExecJS.
   BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile.ci
   BUNDLE_WITHOUT: ci
+  BUNDLE_PATH: vendor/bundle
 
 jobs:
   lint:
@@ -25,7 +26,12 @@ jobs:
       with:
         ruby-version: '2.7'
         bundler: '2.1.4'
-        bundler-cache: true
+    - uses: actions/cache@v4
+      with:
+        path: vendor/bundle
+        key: ${{ runner.os }}-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+    # Not frozen: Gemfile.ci.lock still lists the two gems that Gemfile.ci leaves out.
+    - run: bundle install --jobs 4 --retry 3
     - name: rubocop on the changed files
       run: |
         files=$(git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.rb' | grep -v -E '^(test/dummy|db|vendor|bin)/' || true)
@@ -52,7 +58,11 @@ jobs:
       with:
         ruby-version: '2.7'
         bundler: '2.1.4'
-        bundler-cache: true
+    - uses: actions/cache@v4
+      with:
+        path: vendor/bundle
+        key: ${{ runner.os }}-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+    - run: bundle install --jobs 4 --retry 3
     - name: Run tests
       env:
         RAILS_ENV: test
