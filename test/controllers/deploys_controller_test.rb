@@ -147,7 +147,7 @@ module Shipit
       latest_deploy.until_commit_id = 4
       latest_deploy.save
 
-      delete_tasks(@stack.deploys.where.not(id: latest_deploy.id))
+      Task.delete_with_dependents(@stack.deploys.where.not(id: latest_deploy.id).pluck(:id))
 
       rollback_commit = @stack.commits.where(id: rollback_commit_id).take
 

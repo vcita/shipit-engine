@@ -4,33 +4,30 @@ module Shipit
     queue_as :default
 
     # stack
+    # +-- predictive branches, merge requests and tasks (Stack#delete_predictive_records)
     # +-- api_clients
-    # +-- commits
+    # +-- tasks
     # |   +-- commit_deployments
     # |   |   +-- statuses
+    # |   +-- chunks
+    # +-- merge_requests (before commits: head_id and base_commit_id)
+    # +-- commits
     # |   +-- statuses
     # +-- github_hooks
     # +-- hooks
-    # +-- merge_requests
-    # +-- tasks
-    #     +-- chunks
 
     def perform(stack)
+      stack.delete_predictive_records
       Shipit::ApiClient.where(stack_id: stack.id).delete_all
+      Shipit::Task.where(stack_id: stack.id).pluck(:id).each_slice(100) do |ids|
+        Shipit::Task.delete_with_dependents(ids)
+      end
       commits_ids = Shipit::Commit.where(stack_id: stack.id).pluck(:id)
-      tasks_ids = Shipit::Task.where(stack_id: stack.id).pluck(:id)
-      commit_deployments_ids = Shipit::CommitDeployment.where(task_id: tasks_ids).pluck(:id)
-      Shipit::CommitDeploymentStatus.where(commit_deployment_id: commit_deployments_ids).delete_all
-      Shipit::CommitDeployment.where(id: commit_deployments_ids).delete_all
       Shipit::Status.where(commit_id: commits_ids).delete_all
       Shipit::MergeRequest.where(stack_id: stack.id).delete_all
       Shipit::Commit.where(id: commits_ids).delete_all
       Shipit::GithubHook.where(stack_id: stack.id).destroy_all
       Shipit::Hook.where(stack_id: stack.id).delete_all
-      tasks_ids.each_slice(100) do |ids|
-        Shipit::OutputChunk.where(task_id: ids).delete_all
-        Shipit::Task.where(id: ids).delete_all
-      end
       stack.destroy!
     end
   end

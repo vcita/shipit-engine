@@ -36,7 +36,7 @@ STATUS_CHECKS_BYPASSED = 'MergeRequest#all_status_checks_passed? always returns 
 module ActiveSupport
   class TestCase
     include PayloadsHelper
-    include TasksHelper
+    include PredictiveBuildHelper
     include FixtureAliasesHelper
     include QueriesHelper
     include JSONHelper

@@ -316,6 +316,20 @@ module Shipit
       assert_equal [{ 'image' => 'https://example.com/monitor.png', 'width' => 200, 'height' => 300 }], @stack.monitoring
     end
 
+    test "#destroy deletes a stack that was in a predictive build" do
+      branch = put_in_predictive_build(shipit_merge_requests(:shipit_pending))
+      task_ids = branch.predictive_branch_tasks.pluck(:id)
+
+      assert_difference -> { Stack.count }, -1 do
+        @stack.destroy
+      end
+      assert_empty PredictiveBranch.where(id: branch.id)
+      assert_empty PredictiveMergeRequest.where(predictive_branch_id: branch.id)
+      assert_empty CiJobsStatus.where(predictive_branch_id: branch.id)
+      assert_empty Task.where(id: task_ids)
+      assert_empty OutputChunk.where(task_id: task_ids)
+    end
+
     test "#destroy deletes the related commits" do
       assert_difference -> { @stack.commits.count }, -@stack.commits.count do
         @stack.destroy
@@ -500,7 +514,7 @@ module Shipit
     test "#trigger_continuous_delivery bails out if the stack is deployable but was deployed too recently" do
       Hook.stubs(:emit) # TODO: Once on rails 5, use assert_no_enqueued_jobs(only: Shipit::PerformTaskJob)
 
-      delete_tasks(@stack.tasks)
+      Task.delete_with_dependents(@stack.tasks.pluck(:id))
       deploy = @stack.trigger_deploy(shipit_commits(:first), AnonymousUser.new)
       deploy.run!
       deploy.complete!
@@ -519,7 +533,7 @@ module Shipit
     test "#trigger_continuous_delivery bails out if the commit was already unsuccessfully deployed" do
       Hook.stubs(:emit) # TODO: Once on rails 5, use assert_no_enqueued_jobs(only: Shipit::PerformTaskJob)
 
-      delete_tasks(@stack.tasks)
+      Task.delete_with_dependents(@stack.tasks.pluck(:id))
 
       assert_predicate @stack, :deployable?
       refute_predicate @stack, :deployed_too_recently?
@@ -613,7 +627,7 @@ module Shipit
     end
 
     test "#trigger_continuous_delivery trigger a deploy if all conditions are met" do
-      delete_tasks(@stack.tasks)
+      Task.delete_with_dependents(@stack.tasks.pluck(:id))
       assert_predicate @stack, :deployable?
       refute_predicate @stack, :deployed_too_recently?
 
@@ -623,7 +637,7 @@ module Shipit
     end
 
     test "#trigger_continuous_delivery use default env vars" do
-      delete_tasks(@stack.tasks)
+      Task.delete_with_dependents(@stack.tasks.pluck(:id))
 
       deploy = @stack.trigger_continuous_delivery
       assert_equal({ 'SAFETY_DISABLED' => '0' }, deploy.env)
@@ -878,7 +892,7 @@ module Shipit
 
     test "#trigger_continuous_delivery sets delay if commit was pushed recently" do
       freeze_time do
-        delete_tasks(@stack.tasks)
+        Task.delete_with_dependents(@stack.tasks.pluck(:id))
 
         commit = @stack.next_commit_to_deploy
         commit.touch(:created_at)

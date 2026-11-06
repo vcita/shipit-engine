@@ -21,7 +21,7 @@ module Shipit
     end
 
     test "when a rollback succeeds reverted commits are locked" do
-      delete_tasks(@stack.tasks.where.not(id: shipit_tasks(:shipit_complete, :shipit).map(&:id)))
+      Task.delete_with_dependents(@stack.tasks.where.not(id: shipit_tasks(:shipit_complete, :shipit).map(&:id)).pluck(:id))
 
       # Adjust the from/to commits of the two deploys to be in sequence (Any-3, 3-4)
       to_revert_to = @stack.deploys.success.second_to_last
