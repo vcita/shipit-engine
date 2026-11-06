@@ -16,6 +16,9 @@ module Shipit
     # that phase, e.g. the worker died mid-setup.
     PENDING_GRACE_PERIOD = 5.minutes
 
+    # Statuses where the predictive branches are on GitHub, so a compare with the target works.
+    TARGET_CHECK_STATUSES = %w(branched tasks_running tasks_completed waiting_for_merging).freeze
+
     def lock_key(*args)
       ActiveJob::Arguments.serialize([self.class.name,args.first.id]).join('-')
     end
@@ -38,6 +41,7 @@ module Shipit
           predictive_build.aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_EMERGENCY)
           Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(pipeline)
         end
+        return true if stop_if_stale(predictive_build)
       else
         predictive_build = generate_predictive_build(pipeline)
         return true unless predictive_build
@@ -54,8 +58,6 @@ module Shipit
         run_tasks(predictive_build)
       when :tasks_completed, :waiting_for_merging
         merging_process(predictive_build)
-      when :failed_commits_validation
-        predictive_build.failed
       end
     end
 
@@ -66,39 +68,84 @@ module Shipit
     end
 
     def merge_build(predictive_build)
+      return if stop_if_stale(predictive_build, before_merge: true)
+
+      stopped = false
       Dir.mktmpdir do |dir|
         stack_commands = merge_predictive_branches(predictive_build, dir)
-        push_build(predictive_build, stack_commands) unless predictive_build.merging_failed?
+        # Last check before the push: the clone and merge above take up to a minute.
+        stopped = stop_if_stale(predictive_build, before_merge: true)
+        push_build(predictive_build, stack_commands) unless stopped || predictive_build.merging_failed?
       end
+      return if stopped
+
       if predictive_build.merging_failed?
-        update_failed_build(predictive_build, Shipit::PredictiveBranch::MERGE_PREDICTIVE_TO_STACK_FAILED)
+        # A fast-forward fails when the target moved after the last check.
+        if predictive_build.target_branch_moved?
+          predictive_build.stop_for_target_branch_moved
+        else
+          update_failed_build(predictive_build, Shipit::PredictiveBranch::MERGE_PREDICTIVE_TO_STACK_FAILED)
+        end
       else
         predictive_build.completed
       end
     end
 
     def commits_validation(predictive_build)
+      return if stop_if_stale(predictive_build, before_merge: true)
+
+      # A push to a pull request that MergeQueueHandler missed: it leaves the queue like one it saw.
       predictive_build.predictive_branches.each do |p_branch|
-        stack_commit = Shipit::Commit.where(stack_id: p_branch.stack.id, detached: 0).last
-        if stack_commit.id != p_branch.stack_commit.id
-          predictive_build.failed_commits_validation
-          break
-        end
         p_branch.predictive_merge_requests.waiting.each do |pmr|
           pmr.merge_request.refresh!
-          if pmr.merge_request.head.id != pmr.head.id
-            predictive_build.failed_commits_validation
-            break
-          end
+          pmr.merge_request.cancel! if pmr.merge_request.head_id != pmr.head_id
         end
-        break if predictive_build.failed_commits_validation?
       end
+      return if stop_if_merge_requests_left_queue(predictive_build, before_merge: true)
 
-      if predictive_build.failed_commits_validation?
-        update_failed_build(predictive_build, Shipit::PredictiveBranch::COMMIT_VALIDATION_FAILED)
+      predictive_build.waiting_for_merging
+    end
+
+    def stop_if_stale(predictive_build, before_merge: false)
+      stop_if_merge_requests_left_queue(predictive_build, before_merge: before_merge) ||
+        stop_if_target_branch_moved(predictive_build)
+    end
+
+    # The gate did not test the new base, so the build stops and its merge requests run again
+    # in the next build without a new /shipit.
+    def stop_if_target_branch_moved(predictive_build)
+      return false unless predictive_build.status.in?(TARGET_CHECK_STATUSES)
+      return false unless predictive_build.target_branch_moved?
+
+      Rails.logger.info("Predictive build #{predictive_build.id}: the target branch moved, stopping the build")
+      predictive_build.stop_for_target_branch_moved
+      Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(predictive_build.pipeline)
+      true
+    end
+
+    # A merge request that left the queue must not merge, and its commits are already on the
+    # predictive branches, so the whole build stops. Returns true when it stopped the build.
+    # before_merge also stops on a canceled or rejected predictive merge request: before the
+    # merge every one of them must still be pending, but earlier a failing CI rejects them
+    # and run_tasks then fails the build.
+    def stop_if_merge_requests_left_queue(predictive_build, before_merge: false)
+      return false unless predictive_build.status.in?(PredictiveBuild::WIP_STATUSES)
+
+      left = predictive_build.merge_requests_left_queue
+      if left.any?
+        Rails.logger.info("Predictive build #{predictive_build.id}: merge requests #{left.map(&:number)} " \
+                          "left the queue, stopping the build")
+        predictive_build.stop_for_merge_requests_left_queue(left)
+      elsif before_merge && predictive_build.predictive_merge_requests_stopped?
+        Rails.logger.info("Predictive build #{predictive_build.id}: a predictive merge request was stopped, " \
+                          "stopping the build")
+        predictive_build.cancel
+        predictive_build.aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_LEFT_QUEUE)
       else
-        predictive_build.waiting_for_merging
+        return false
       end
+      Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(predictive_build.pipeline)
+      true
     end
 
     def update_failed_build(predictive_build, reject_reason)
