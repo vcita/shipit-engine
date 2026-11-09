@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 2020_11_19_182502) do
+ActiveRecord::Schema.define(version: 2021_04_13_094049) do
 
   create_table "api_clients", force: :cascade do |t|
     t.text "permissions", limit: 65535
@@ -36,6 +36,18 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.index ["commit_id"], name: "index_check_runs_on_commit_id"
     t.index ["github_id", "commit_id"], name: "index_check_runs_on_github_id_and_commit_id", unique: true
     t.index ["stack_id"], name: "index_check_runs_on_stack_id"
+  end
+
+  create_table "ci_jobs_statuses", force: :cascade do |t|
+    t.bigint "predictive_build_id"
+    t.bigint "predictive_branch_id"
+    t.string "name", limit: 100, null: false
+    t.string "status", limit: 50, default: "running", null: false
+    t.text "link", limit: 16777215, null: false
+    t.datetime "created_at", precision: 6, null: false
+    t.datetime "updated_at", precision: 6, null: false
+    t.index ["predictive_branch_id"], name: "index_ci_jobs_statuses_on_predictive_branch_id"
+    t.index ["predictive_build_id"], name: "index_ci_jobs_statuses_on_predictive_build_id"
   end
 
   create_table "commit_deployment_statuses", force: :cascade do |t|
@@ -161,13 +173,13 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.string "base_ref", limit: 1024
     t.integer "base_commit_id"
     t.integer "merge_request_id"
-    t.string "mode", limit: 10, default: "default", null: false
-    t.index ["base_commit_id"], name: "fk_rails_eda2bf836a"
+    t.string "mode", limit: 30, default: "default", null: false
     t.index ["head_id"], name: "index_merge_requests_on_head_id"
     t.index ["merge_request_id"], name: "index_merge_requests_on_merge_request_id"
     t.index ["merge_requested_by_id"], name: "index_merge_requests_on_merge_requested_by_id"
     t.index ["merge_status"], name: "index_merge_requests_on_merge_status"
     t.index ["stack_id", "github_id"], name: "index_merge_requests_on_stack_id_and_github_id", unique: true
+    t.index ["stack_id", "merge_status", "head_id"], name: "index_status_head"
     t.index ["stack_id", "merge_status"], name: "index_merge_requests_on_stack_id_and_merge_status"
     t.index ["stack_id", "mode", "merge_status", "merge_request_id", "merge_requested_at"], name: "index_stack_mod_status"
     t.index ["stack_id", "number"], name: "index_merge_requests_on_stack_id_and_number", unique: true
@@ -185,8 +197,8 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
   create_table "pipelines", force: :cascade do |t|
     t.string "name", limit: 100, null: false
     t.string "environment", limit: 50, default: "production", null: false
-    t.string "lock_reason"
-    t.integer "lock_author_id"
+    t.string "lock_reason", limit: 255
+    t.integer "lock_author_id", limit: 4
     t.datetime "locked_since"
     t.datetime "archived_since"
     t.datetime "last_cd_at"
@@ -197,23 +209,44 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.index ["environment"], name: "index_pipelines_on_environment"
   end
 
-  create_table "predictive_builds", force: :cascade do |t|
-    t.bigint "pipeline_id", null: false
-    t.string "status", limit: 10, default: "pending", null: false
-    t.string "branch", limit: 10, null: false
+  create_table "predictive_branches", force: :cascade do |t|
+    t.integer "predictive_build_id", null: false
+    t.integer "stack_id", null: false
+    t.string "status", limit: 50, default: "pending", null: false
+    t.string "branch", limit: 100, null: false
     t.datetime "created_at", precision: 6, null: false
     t.datetime "updated_at", precision: 6, null: false
+    t.integer "stack_commit_id", null: false
+    t.integer "until_commit_id"
+    t.string "until_commit_sha", limit: 100
+    t.index ["predictive_build_id"], name: "index_predictive_branches_on_predictive_build_id"
+    t.index ["stack_commit_id"], name: "index_predictive_branches_on_stack_commit_id"
+    t.index ["stack_id"], name: "index_predictive_branches_on_stack_id"
+    t.index ["until_commit_id"], name: "index_predictive_branches_on_until_commit_id"
+  end
+
+  create_table "predictive_builds", force: :cascade do |t|
+    t.integer "pipeline_id", null: false
+    t.string "status", limit: 50, default: "pending", null: false
+    t.string "branch", limit: 100, null: false
+    t.datetime "created_at", precision: 6, null: false
+    t.datetime "updated_at", precision: 6, null: false
+    t.string "mode", limit: 30, default: "default", null: false
+    t.string "ci_stack_status", limit: 50, default: "ci_stack_pending"
+    t.string "ci_pipeline_status", limit: 50, default: "ci_pipeline_pending"
     t.index ["pipeline_id"], name: "index_predictive_builds_on_pipeline_id"
   end
 
   create_table "predictive_merge_requests", force: :cascade do |t|
-    t.bigint "predictive_build_id"
     t.integer "merge_request_id", null: false
     t.string "status", limit: 10, default: "pending", null: false
     t.datetime "created_at", precision: 6, null: false
     t.datetime "updated_at", precision: 6, null: false
+    t.integer "predictive_branch_id"
+    t.integer "head_id", null: false
+    t.index ["head_id"], name: "index_predictive_merge_requests_on_head_id"
     t.index ["merge_request_id"], name: "index_predictive_merge_requests_on_merge_request_id"
-    t.index ["predictive_build_id"], name: "index_predictive_merge_requests_on_predictive_build_id"
+    t.index ["predictive_branch_id"], name: "index_predictive_merge_requests_on_predictive_branch_id"
   end
 
   create_table "pull_request_assignments", force: :cascade do |t|
@@ -253,9 +286,9 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.bigint "github_id"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
-    t.index ["commit_id", "github_id"], name: "index_deploy_statuses_on_commit_id_and_github_id"
-    t.index ["stack_id", "commit_id"], name: "index_deploy_statuses_on_stack_id_and_commit_id"
-    t.index ["user_id"], name: "index_deploy_statuses_on_user_id"
+    t.index ["commit_id", "github_id"], name: "index_release_statuses_on_commit_id_and_github_id"
+    t.index ["stack_id", "commit_id"], name: "index_release_statuses_on_stack_id_and_commit_id"
+    t.index ["user_id"], name: "index_release_statuses_on_user_id"
   end
 
   create_table "repositories", force: :cascade do |t|
@@ -316,7 +349,7 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
   end
 
   create_table "tasks", force: :cascade do |t|
-    t.integer "stack_id", limit: 4, null: false
+    t.integer "stack_id", limit: 4
     t.integer "since_commit_id", limit: 4
     t.integer "until_commit_id", limit: 4
     t.string "status", limit: 10, default: "pending", null: false
@@ -324,12 +357,12 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.datetime "updated_at"
     t.integer "user_id", limit: 4
     t.boolean "rolled_up", default: false, null: false
-    t.string "type", limit: 20
+    t.string "type", limit: 50
     t.integer "parent_id", limit: 4
     t.integer "additions", limit: 4, default: 0
     t.integer "deletions", limit: 4, default: 0
     t.text "definition", limit: 65535
-    t.binary "gzip_output"
+    t.binary "gzip_output", limit: 16777215
     t.boolean "rollback_once_aborted", default: false, null: false
     t.text "env"
     t.integer "confirmations", default: 0, null: false
@@ -341,7 +374,10 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.integer "rollback_once_aborted_to_id"
     t.integer "retry_attempt", default: 0, null: false
     t.integer "max_retries"
-    t.bigint "predictive_build_id"
+    t.integer "predictive_build_id"
+    t.integer "predictive_branch_id"
+    t.string "predictive_task_type", limit: 50
+    t.index ["predictive_branch_id"], name: "index_tasks_on_predictive_branch_id"
     t.index ["predictive_build_id"], name: "index_tasks_on_predictive_build_id"
     t.index ["rolled_up", "created_at", "status"], name: "index_tasks_on_rolled_up_and_created_at_and_status"
     t.index ["since_commit_id"], name: "index_tasks_on_since_commit_id"
@@ -381,4 +417,25 @@ ActiveRecord::Schema.define(version: 2020_11_19_182502) do
     t.index ["updated_at"], name: "index_users_on_updated_at"
   end
 
+  add_foreign_key "ci_jobs_statuses", "predictive_branches"
+  add_foreign_key "ci_jobs_statuses", "predictive_builds"
+  add_foreign_key "commit_deployment_statuses", "commit_deployments"
+  add_foreign_key "commit_deployments", "commits"
+  add_foreign_key "commit_deployments", "tasks"
+  add_foreign_key "memberships", "teams"
+  add_foreign_key "memberships", "users"
+  add_foreign_key "merge_requests", "commits", column: "base_commit_id"
+  add_foreign_key "merge_requests", "commits", column: "head_id"
+  add_foreign_key "merge_requests", "stacks"
+  add_foreign_key "merge_requests", "users", column: "merge_requested_by_id"
+  add_foreign_key "predictive_branches", "commits", column: "stack_commit_id"
+  add_foreign_key "predictive_branches", "commits", column: "until_commit_id"
+  add_foreign_key "predictive_branches", "predictive_builds"
+  add_foreign_key "predictive_branches", "stacks"
+  add_foreign_key "predictive_builds", "pipelines"
+  add_foreign_key "predictive_merge_requests", "commits", column: "head_id"
+  add_foreign_key "predictive_merge_requests", "merge_requests"
+  add_foreign_key "predictive_merge_requests", "predictive_branches"
+  add_foreign_key "tasks", "predictive_branches"
+  add_foreign_key "tasks", "predictive_builds"
 end

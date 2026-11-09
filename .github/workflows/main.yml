@@ -1,118 +1,93 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  # Pull request branches run once, through the pull_request event.
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  # libv8 and mini_racer only compile assets; Node.js serves ExecJS.
+  BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile.ci
+  BUNDLE_WITHOUT: ci
+  BUNDLE_PATH: vendor/bundle
 
 jobs:
   lint:
     name: Lint Ruby
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # nokogiri 1.10 does not build on glibc 2.35+ (Ubuntu 22.04 and later); bullseye has 2.31.
+    container: ruby:2.7-bullseye
 
     steps:
-    - uses: actions/checkout@v1
-    - name: Set up Ruby 2.5
-      uses: actions/setup-ruby@v1
+    - uses: actions/checkout@v4
       with:
-        ruby-version: 2.5.x
-    - uses: actions/cache@v1
+        fetch-depth: 0
+    - name: Write Gemfile.ci
+      run: |
+        grep -v -E "gem '(libv8|mini_racer)'" Gemfile > Gemfile.ci
+        cp Gemfile.lock Gemfile.ci.lock
+    - uses: actions/cache@v4
       with:
         path: vendor/bundle
-        key: ${{ runner.os }}-gems-${{ hashFiles('**/Gemfile.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-gems-
-    - name: rubocop
+        key: bullseye-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+        restore-keys: bullseye-ruby-2.7-gems-
+    # Not frozen: Gemfile.ci.lock still lists the two gems that Gemfile.ci leaves out.
+    - run: |
+        gem install bundler -v 2.1.4 --no-document
+        bundle _2.1.4_ install --jobs 4 --retry 3
+    # Only offenses on lines this pull request adds: many files still have old offenses.
+    - name: rubocop on the added lines
       run: |
-        sudo apt-get update
-        sudo apt-get -yqq install libpq-dev libsqlite3-dev libmysqlclient-dev
-        gem install bundler:2.1.4
-        bundle config path vendor/bundle
-        bundle install --jobs 4 --retry 3
-        bundle exec rubocop
-
-  # mysql:
-  #   name: Tests with MySQL
-  #   runs-on: ubuntu-latest
-  #   strategy:
-  #     matrix:
-  #       ruby_version:
-  #         - 2.5.x
-
-  #   services:
-  #     db:
-  #       image: mysql:5.7
-  #       ports:
-  #         - 3306
-  #       env:
-  #         MYSQL_ALLOW_EMPTY_PASSWORD: 'true'
-  #       options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=2s --health-retries=3
-  #     redis:
-  #       image: redis
-  #       ports:
-  #       - 6379:6379
-  #       options: --entrypoint redis-server
-
-  #   steps:
-  #   - uses: actions/checkout@v1
-  #   - name: Set up Ruby ${{ matrix.ruby_version }}
-  #     uses: actions/setup-ruby@v1
-  #     with:
-  #       ruby-version: ${{ matrix.ruby_version }}
-  #   - uses: actions/cache@v1
-  #     with:
-  #       path: vendor/bundle
-  #       key: ${{ runner.os }}-${{ matrix.ruby_version }}-gems-${{ hashFiles('**/Gemfile.lock') }}
-  #       restore-keys: |
-  #         ${{ runner.os }}-${{ matrix.ruby_version }}-gems-
-  #   - name: Run tests
-  #     env:
-  #       RAILS_ENV: test
-  #       DATABASE_URL: 'mysql2://root@127.0.0.1:${{ job.services.db.ports[3306] }}'
-  #     run: |
-  #       sudo apt-get update
-  #       sudo apt-get -yqq install libpq-dev libsqlite3-dev libmysqlclient-dev
-  #       gem install bundler:2.1.4
-  #       bundle config path vendor/bundle
-  #       bundle install --jobs 4 --retry 3
-  #       cp test/dummy/config/database.mysql.yml test/dummy/config/database.yml
-  #       bundle exec rake db:create db:schema:load test
-  #       bundle exec rake db:seed
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git diff -U0 --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.rb' \
+          ':!test/dummy' ':!db' ':!vendor' ':!bin' \
+          | awk '/^\+\+\+ b\//{f=substr($2,3)} /^@@/{split($3,a,","); s=substr(a[1],2); n=(a[2]==""?1:a[2]); for(i=s;i<s+n;i++) print f":"i}' \
+          > added-lines.txt
+        files=$(cut -d: -f1 added-lines.txt | sort -u)
+        if [ -z "$files" ]; then echo "No Ruby lines added."; exit 0; fi
+        # Exit 1 means offenses were found; anything higher means rubocop did not run.
+        status=0
+        bundle _2.1.4_ exec rubocop --force-exclusion --format emacs $files > rubocop.out || status=$?
+        if [ "$status" -gt 1 ]; then cat rubocop.out; exit "$status"; fi
+        sed "s#^$PWD/##" rubocop.out > offenses.txt
+        awk -F: 'NR==FNR{added[$1":"$2]=1; next} added[$1":"$2]' added-lines.txt offenses.txt > new-offenses.txt
+        cat new-offenses.txt
+        test ! -s new-offenses.txt
 
   sqlite:
     name: Tests with SQLite3
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        ruby_version:
-          - 2.5.x
-          - 2.6.x
-          - 2.7.x
+    container: ruby:2.7-bullseye
 
     services:
       redis:
         image: redis
-        ports:
-        - 6379:6379
-        options: --entrypoint redis-server
 
     steps:
-    - uses: actions/checkout@v1
-    - name: Set up Ruby ${{ matrix.ruby_version }}
-      uses: actions/setup-ruby@v1
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
       with:
-        ruby-version: ${{ matrix.ruby_version }}
-    - uses: actions/cache@v1
+        node-version: '18'
+    - name: Write Gemfile.ci
+      run: |
+        grep -v -E "gem '(libv8|mini_racer)'" Gemfile > Gemfile.ci
+        cp Gemfile.lock Gemfile.ci.lock
+    - uses: actions/cache@v4
       with:
         path: vendor/bundle
-        key: ${{ runner.os }}-${{ matrix.ruby_version }}-gems-${{ hashFiles('**/Gemfile.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-${{ matrix.ruby_version }}-gems-
+        key: bullseye-ruby-2.7-gems-${{ hashFiles('Gemfile.lock', 'shipit-engine.gemspec') }}
+        restore-keys: bullseye-ruby-2.7-gems-
+    - run: |
+        gem install bundler -v 2.1.4 --no-document
+        bundle _2.1.4_ install --jobs 4 --retry 3
     - name: Run tests
       env:
         RAILS_ENV: test
+        REDIS_URL: redis://redis:6379/7
       run: |
-        sudo apt-get update
-        sudo apt-get -yqq install libpq-dev libsqlite3-dev libmysqlclient-dev
-        gem install bundler:2.1.4
-        bundle config path vendor/bundle
-        bundle install --jobs 4 --retry 3
-        bundle exec rake db:create db:schema:load test
-        bundle exec rake db:seed
+        cd test/dummy
+        bundle _2.1.4_ exec rake db:create db:schema:load
+        cd ../..
+        bundle _2.1.4_ exec rake test

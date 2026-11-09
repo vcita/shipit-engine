@@ -9,10 +9,8 @@ end
 require 'webmock/minitest'
 
 require File.expand_path('../../test/dummy/config/environment.rb', __FILE__)
-ActiveRecord::Migrator.migrations_paths = [
-  File.expand_path('../../test/dummy/db/migrate', __FILE__),
-  File.expand_path('../../db/migrate', __FILE__),
-]
+# The pending-migration check reads Migrator.migrations_paths, not the app paths (see test/dummy/config/application.rb).
+ActiveRecord::Migrator.migrations_paths = Rails.application.paths['db/migrate'].to_a
 require 'rails/test_help'
 require 'mocha/minitest'
 require 'spy/integration'
