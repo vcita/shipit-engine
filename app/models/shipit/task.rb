@@ -54,6 +54,15 @@ module Shipit
         pluck(:started_at, :ended_at).select { |s, e| s && e }.map { |s, e| e - s }
       end
 
+      # Deletes the tasks without callbacks, together with the rows that reference them.
+      def delete_with_dependents(task_ids)
+        deployment_ids = CommitDeployment.where(task_id: task_ids).pluck(:id)
+        CommitDeploymentStatus.where(commit_deployment_id: deployment_ids).delete_all
+        CommitDeployment.where(id: deployment_ids).delete_all
+        OutputChunk.where(task_id: task_ids).delete_all
+        where(id: task_ids).delete_all
+      end
+
       def last_completed
         completed.last
       end
