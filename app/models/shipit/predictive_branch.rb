@@ -293,7 +293,7 @@ module Shipit
       when MR_LEFT_QUEUE_DURING_MERGE
         msg = "This pull request left the merge queue while Shipit merged CI #{predictive_build.id}. " \
               "Shipit had already pushed the commits that the CI tested to #{stack.branch}. " \
-              "Commits pushed after that are not merged."
+              "Commits pushed after that are not merged. Comment `/shipit` to merge them."
       else
         return false
       end

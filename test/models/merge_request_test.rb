@@ -82,6 +82,31 @@ module Shipit
       assert_empty @pr.predictive_merge_request.waiting
     end
 
+    test ".request_merge! accepts new commits on a pull request that left the queue while Shipit merged it" do
+      put_in_build(status: :completed)
+      PredictiveMergeRequest.where(merge_request: @pr).each(&:merged)
+      @pr.cancel!
+      new_head = shipit_commits(:second)
+      assert_not_equal @pr.head, new_head
+      @pr.update!(head: new_head)
+      MergeRequest.any_instance.expects(:refresh!).once
+
+      MergeRequest.request_merge!(@stack, @pr.number, @user)
+
+      assert_predicate @pr.reload, :pending?
+    end
+
+    test ".request_merge! refuses a pull request whose head Shipit already merged" do
+      put_in_build(status: :completed)
+      PredictiveMergeRequest.where(merge_request: @pr).each(&:merged)
+      @pr.cancel!
+      MergeRequest.any_instance.stubs(:refresh!)
+
+      error = assert_raises(ArgumentError) { MergeRequest.request_merge!(@stack, @pr.number, @user) }
+
+      assert_match(/was already merged by Shipit/, error.message)
+    end
+
     test ".extract_number can get a pull request number from different formats" do
       assert_equal 42, MergeRequest.extract_number(@stack, '42')
       assert_equal 42, MergeRequest.extract_number(@stack, '#42')

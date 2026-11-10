@@ -129,7 +129,7 @@ module Shipit
         build.merging_failed
         {}
       end
-      PredictiveBuild.any_instance.stubs(:target_branch_moved?).returns(false).then.returns(true)
+      PredictiveBuild.any_instance.stubs(:target_branch_moved?).returns(true)
       PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
       @job.expects(:push_build).never
 
@@ -139,6 +139,85 @@ module Shipit
       assert_predicate @first_pmr.reload, :canceled?
       assert_predicate @first.reload, :pending?
       assert_predicate @second.reload, :pending?
+    end
+
+    test "#merge_predictive_branches keeps the predictive branch on GitHub for the check before the push" do
+      @build.waiting_for_merging
+      commands = stub(git_clone: stub(run!: true), git_fetch: stub(run!: true), git_merge_ff: stub(run!: true))
+      commands.expects(:git_delete_branch).never
+      Commands.stubs(:for).returns(commands)
+
+      @job.merge_predictive_branches(@build, Dir.tmpdir)
+
+      assert_predicate @build.reload, :waiting_for_merging?
+    end
+
+    test "#push_build pushes with a lease, then deletes the predictive branch" do
+      @build.waiting_for_merging
+      commands = mock
+      order = sequence('push')
+      commands.expects(:git_push_to_target).returns(stub(run!: true)).in_sequence(order)
+      commands.expects(:git_last_commit).returns(stub(run!: +"#{shipit_commits(:fifth).sha}\r\n")).in_sequence(order)
+      commands.expects(:git_delete_branch).with(@branch.branch).returns(stub(run!: true)).in_sequence(order)
+
+      pushed = @job.push_build(@build, { @stack => commands })
+
+      assert_equal [@branch], pushed
+      assert_predicate @build.reload, :waiting_for_merging?
+    end
+
+    test "#merge_build puts the pull requests back in the queue when the lease rejects the push" do
+      @build.waiting_for_merging
+      commands = mock
+      commands.expects(:git_push_to_target).returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('stale info', 1)) })
+      commands.expects(:git_delete_branch).never
+      stack = @stack
+      @job.define_singleton_method(:merge_predictive_branches) { |_predictive_build, _dir| { stack => commands } }
+      # The target moves between the check before the push and the push itself.
+      PredictiveBuild.any_instance.stubs(:target_branch_moved?).returns(false).then.returns(true)
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+
+      @job.merge_build(@build)
+
+      assert_predicate @build.reload, :canceled?
+      assert_predicate @first.reload, :pending?
+      assert_predicate @second.reload, :pending?
+    end
+
+    test "#merge_build rejects the pull requests when the push fails and the target did not move" do
+      @build.waiting_for_merging
+      commands = mock
+      commands.expects(:git_push_to_target).returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('denied', 1)) })
+      stack = @stack
+      @job.define_singleton_method(:merge_predictive_branches) { |_predictive_build, _dir| { stack => commands } }
+      PredictiveBuild.any_instance.stubs(:target_branch_moved?).returns(false)
+
+      @job.merge_build(@build)
+
+      assert_predicate @build.reload, :merging_failed?
+      assert_predicate @first.reload, :rejected?
+    end
+
+    test "#perform compares each predictive branch twice on the tick that merges" do
+      @build.waiting_for_merging
+      @job.stubs(:merge_predictive_branches).returns({})
+      @job.stubs(:push_build).returns([@branch])
+      PredictiveBranch.any_instance.expects(:target_branch_moved?).twice.returns(false)
+
+      @job.perform(@pipeline)
+
+      assert_predicate @build.reload, :completed?
+    end
+
+    test "#commits_validation fetches each merge request from GitHub once" do
+      @build.tasks_completed
+      @first.update!(head: shipit_commits(:first))
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+      MergeRequest.any_instance.expects(:refresh!).twice
+
+      @job.commits_validation(@build)
+
+      assert_predicate @build.reload, :canceled?
     end
 
     test "#merge_build does not push when a pull request left the queue during the merge" do

@@ -171,7 +171,7 @@ module Shipit
       transaction do
         merge_request = request_merge(stack, number, user)
         merge_request.ensure_not_in_running_build!
-        if merge_request.predictive_merge_request.completed.any?
+        if merge_request.merged_by_shipit?
           raise ArgumentError, "Pull Request ##{number} was already merged by Shipit."
         end
 
@@ -191,7 +191,7 @@ module Shipit
               with_name = "Pull Request ('#{with_stack.repository.full_name}/pull/#{with_number}')"
               if (build = with_merge_request.current_build!)
                 errors << "#{with_name} #{in_running_build_message(build)}"
-              elsif with_merge_request.predictive_merge_request.completed.any?
+              elsif with_merge_request.merged_by_shipit?
                 errors << "#{with_name} was already merged by Shipit."
               # Check that both root and with PRs belongs to the same pipeline
               elsif merge_request.stack.pipeline != with_merge_request.stack.pipeline
@@ -381,6 +381,21 @@ module Shipit
     def ensure_not_in_running_build!
       build = current_build!
       raise ArgumentError, "Pull Request ##{number} #{self.class.in_running_build_message(build)}" if build
+    end
+
+    # A cancel during the push merges the commits that the CI tested, but not the commits pushed
+    # after them, so a pull request whose head Shipit has not merged can run again.
+    def merged_by_shipit?
+      completed = predictive_merge_request.completed
+      return false unless completed.exists?
+      return true if merged?
+
+      begin
+        refresh! # The stored head can be older than the last push.
+      rescue Octokit::Error, Faraday::Error => e
+        Rails.logger.warn("Merge request #{id}: could not refresh before /shipit: #{e.message}")
+      end
+      completed.where(head_id: head_id).exists?
     end
 
     def self.in_running_build_message(build)

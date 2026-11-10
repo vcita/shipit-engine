@@ -46,6 +46,14 @@ module Shipit
             assert_predicate @merge_request.reload, :pending?
           end
 
+          test "a push keeps a queued pull request whose only build entry is left over from an ended build" do
+            put_in_running_build.predictive_branch.predictive_build.failed
+
+            process('synchronize', sha: 'f' * 40)
+
+            assert_predicate @merge_request.reload, :pending?
+          end
+
           test "ignores other pull request actions" do
             process('labeled')
 

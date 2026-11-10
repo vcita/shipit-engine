@@ -53,8 +53,15 @@ module Shipit
             return true if params.action == 'closed'
 
             merge_request.predictive_merge_request.waiting.any? do |pmr|
-              pmr.head.nil? || pmr.head.sha != params.pull_request.head.sha
+              build_running?(pmr) && (pmr.head.nil? || pmr.head.sha != params.pull_request.head.sha)
             end
+          end
+
+          # A waiting entry of a build that already ended is a leftover. No build would stop, so
+          # canceling on it would take the pull request out of the queue without a comment.
+          def build_running?(pmr)
+            build = pmr.predictive_branch&.predictive_build
+            build.present? && build.status.in?(Shipit::PredictiveBuild::WIP_STATUSES)
           end
         end
       end

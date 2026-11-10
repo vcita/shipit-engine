@@ -327,9 +327,9 @@ module Shipit
     # The predictive branches already contain the commits of these merge requests, so
     # nothing in this build can merge. The other merge requests stay pending and run in the
     # next build.
-    def stop_for_merge_requests_left_queue(merge_requests)
+    def stop_for_merge_requests_left_queue(merge_requests, refresh: true)
       waiting_predictive_merge_requests.where(merge_request: merge_requests).each do |pmr|
-        pmr.cancel(pmr.predictive_branch.comment_msg(left_queue_reason(pmr)))
+        pmr.cancel(pmr.predictive_branch.comment_msg(left_queue_reason(pmr, refresh: refresh)))
       end
       cancel
       aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_LEFT_QUEUE)
@@ -448,10 +448,10 @@ module Shipit
       PredictiveMergeRequest.waiting.where(predictive_branch: predictive_branches)
     end
 
-    def left_queue_reason(pmr)
+    def left_queue_reason(pmr, refresh: true)
       merge_request = pmr.merge_request
       begin
-        merge_request.refresh!
+        merge_request.refresh! if refresh
       rescue StandardError => e
         Rails.logger.warn("Predictive build #{id}: could not refresh merge request #{merge_request.id}: #{e.message}")
       end

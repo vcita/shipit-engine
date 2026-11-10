@@ -67,21 +67,23 @@ module Shipit
       predictive_build.update_completed_requests if predictive_build.completed?
     end
 
+    # perform already ran stop_if_stale on this tick, so the only check here is the one after the
+    # clone and merge, which take up to a minute.
     def merge_build(predictive_build)
-      return if stop_if_stale(predictive_build, before_merge: true)
-
       stopped = false
+      pushed = []
       Dir.mktmpdir do |dir|
         stack_commands = merge_predictive_branches(predictive_build, dir)
-        # Last check before the push: the clone and merge above take up to a minute.
         stopped = stop_if_stale(predictive_build, before_merge: true)
-        push_build(predictive_build, stack_commands) unless stopped || predictive_build.merging_failed?
+        pushed = push_build(predictive_build, stack_commands) unless stopped || predictive_build.merging_failed?
       end
       return if stopped
 
       if predictive_build.merging_failed?
-        # A fast-forward fails when the target moved after the last check.
-        if predictive_build.target_branch_moved?
+        # The fast-forward or the push fails when the target moved after the last check. The
+        # predictive branches are still on GitHub, so the compare works. A partial push of a
+        # multi-stack build already merged some pull requests, so they cannot run again.
+        if Array(pushed).empty? && predictive_build.target_branch_moved?
           predictive_build.stop_for_target_branch_moved
         else
           update_failed_build(predictive_build, Shipit::PredictiveBranch::MERGE_PREDICTIVE_TO_STACK_FAILED)
@@ -91,9 +93,8 @@ module Shipit
       end
     end
 
+    # perform already ran stop_if_stale on this tick.
     def commits_validation(predictive_build)
-      return if stop_if_stale(predictive_build, before_merge: true)
-
       # A push to a pull request that MergeQueueHandler missed: it leaves the queue like one it saw.
       predictive_build.predictive_branches.each do |p_branch|
         p_branch.predictive_merge_requests.waiting.each do |pmr|
@@ -101,7 +102,7 @@ module Shipit
           pmr.merge_request.cancel! if pmr.merge_request.head_id != pmr.head_id
         end
       end
-      return if stop_if_merge_requests_left_queue(predictive_build, before_merge: true)
+      return if stop_if_merge_requests_left_queue(predictive_build, before_merge: true, refreshed: true)
 
       predictive_build.waiting_for_merging
     end
@@ -127,15 +128,16 @@ module Shipit
     # predictive branches, so the whole build stops. Returns true when it stopped the build.
     # before_merge also stops on a canceled or rejected predictive merge request: before the
     # merge every one of them must still be pending, but earlier a failing CI rejects them
-    # and run_tasks then fails the build.
-    def stop_if_merge_requests_left_queue(predictive_build, before_merge: false)
+    # and run_tasks then fails the build. refreshed skips a second GitHub fetch of merge requests
+    # that the caller refreshed on this tick.
+    def stop_if_merge_requests_left_queue(predictive_build, before_merge: false, refreshed: false)
       return false unless predictive_build.status.in?(PredictiveBuild::WIP_STATUSES)
 
       left = predictive_build.merge_requests_left_queue
       if left.any?
         Rails.logger.info("Predictive build #{predictive_build.id}: merge requests #{left.map(&:number)} " \
                           "left the queue, stopping the build")
-        predictive_build.stop_for_merge_requests_left_queue(left)
+        predictive_build.stop_for_merge_requests_left_queue(left, refresh: !refreshed)
       elsif before_merge && predictive_build.predictive_merge_requests_stopped?
         Rails.logger.info("Predictive build #{predictive_build.id}: a predictive merge request was stopped, " \
                           "stopping the build")
@@ -319,7 +321,6 @@ module Shipit
           stack_commands[p_branch.stack].git_clone(chdir: dir).run!
           stack_commands[p_branch.stack].git_fetch(p_branch.branch).run!
           stack_commands[p_branch.stack].git_merge_ff(p_branch.branch).run!
-          stack_commands[p_branch.stack].git_delete_branch(p_branch.branch).run!
         end
       rescue
         predictive_build.merging_failed
@@ -328,10 +329,20 @@ module Shipit
       stack_commands
     end
 
+    # Returns the predictive branches it pushed. A failed push marks the build merging_failed.
     def push_build(predictive_build, stack_commands)
+      pushed = []
       predictive_build.predictive_branches.each do |p_branch|
         puts "--------- push_build:: Pushing #{p_branch.branch}"
-        stack_commands[p_branch.stack].git_push(true).run!
+        begin
+          stack_commands[p_branch.stack].git_push_to_target.run!
+        rescue Command::Error => e
+          Rails.logger.error("Predictive build #{predictive_build.id}: could not push #{p_branch.branch} " \
+                             "to #{p_branch.stack.branch}: #{e.message}")
+          predictive_build.merging_failed
+          return pushed
+        end
+        pushed << p_branch
         puts "--------- push_build:: Getting #{p_branch.stack.branch} last commit sha"
         last_commit_sha = stack_commands[p_branch.stack].git_last_commit(p_branch.stack.branch).run!
         puts "--------- push_build:: last_commit_sha = #{last_commit_sha}"
@@ -348,13 +359,24 @@ module Shipit
           p_branch.save!
         end
       end
-      stack_commands
+      delete_predictive_branches(predictive_build, stack_commands)
+      pushed
     end
 
     private
 
     def with_all(merge_request)
       [merge_request] + merge_request.with_merge_requests
+    end
+
+    # Only after every push: until then target_branch_moved? compares against these branches.
+    # A branch left on GitHub does no harm, so a failed delete does not fail the merge.
+    def delete_predictive_branches(predictive_build, stack_commands)
+      predictive_build.predictive_branches.each do |p_branch|
+        stack_commands[p_branch.stack].git_delete_branch(p_branch.branch).run!
+      rescue Command::Error => e
+        Rails.logger.warn("Predictive build #{predictive_build.id}: could not delete #{p_branch.branch}: #{e.message}")
+      end
     end
 
     def push_predictive_branch(stack_commands, changed_stacks)
