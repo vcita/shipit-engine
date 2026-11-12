@@ -190,6 +190,8 @@ module Shipit
     def update_status(task)
       pipeline_task_status = task.status.to_sym
       predictive_task_type = task.predictive_task_type.to_sym
+      # aborting_tasks stops the run step on purpose, so its end is not a CI result.
+      return if predictive_task_type == :run && (ci_pipeline_canceling? || ci_pipeline_canceled?)
 
       status, jobs, no_match_message = Shipit::PredictiveBuild.parse_task_output(task)
       upsert_ci_job_statuses(jobs)
@@ -292,16 +294,26 @@ module Shipit
       failed
     end
 
+    # The run step triggers its Jenkins jobs one by one. The abort step aborts only the jobs that
+    # already run, so the run step must stop first, or it starts the rest after the abort.
+    def abort_run_tasks
+      predictive_build_tasks.where(predictive_task_type: 'run', status: Task::ACTIVE_STATUSES).each do |task|
+        task.abort!(aborted_by: Shipit::CommandLineUser.new)
+      end
+    end
+
     def aborting_tasks(is_failed, reject_reason)
       Rails.logger.info("Predictive build #{id} aborting_tasks; predictive build data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]")
       if ci_pipeline_tasks_running?
         ci_pipeline_canceling
+        abort_run_tasks
         trigger_pipeline_tasks(true) if predictive_branches.any?
       end
 
       predictive_branches.each do |p_branch|
         if ci_stack_tasks_running? && p_branch.tasks_in_progress? && !p_branch.tasks_canceling?
           p_branch.tasks_canceling
+          p_branch.abort_run_tasks
           p_branch.trigger_task(true)
         end
 
