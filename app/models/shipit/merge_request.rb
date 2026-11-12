@@ -126,7 +126,13 @@ module Shipit
       after_transition any => %i(pending merged rejected canceled) do |mr|
         mr.set_metrics
       end
+
+      after_transition any => :canceled do |mr|
+        mr.instance_variable_set(:@left_queue, true)
+      end
     end
+
+    after_commit :stop_running_build
 
     def set_metrics
       labels = {pipeline: stack.pipeline.id.to_s, stack: stack.repository.full_name, mode: mode, status: merge_status.to_s}
@@ -164,8 +170,9 @@ module Shipit
       merge_request = nil
       transaction do
         merge_request = request_merge(stack, number, user)
-        if merge_request.predictive_merge_request.waiting.any? or merge_request.predictive_merge_request.completed.any?
-          raise ArgumentError, "Pull Request is neither waiting nor merged, this should be impossible."
+        merge_request.ensure_not_in_running_build!
+        if merge_request.merged_by_shipit?
+          raise ArgumentError, "Pull Request ##{number} was already merged by Shipit."
         end
 
         # 60 sec to do our thing
@@ -181,8 +188,11 @@ module Shipit
           with.each do |with_stack, with_prs|
             with_prs.each do |with_number|
               with_merge_request = request_merge(with_stack, with_number, user)
-              if with_merge_request.predictive_merge_request.waiting.any? or with_merge_request.predictive_merge_request.completed.any?
-                errors << "Pull Request ('#{stack.repository.full_name}/pull/#{with_number}') is neither waiting nor merged, this should be impossible."
+              with_name = "Pull Request ('#{with_stack.repository.full_name}/pull/#{with_number}')"
+              if (build = with_merge_request.current_build!)
+                errors << "#{with_name} #{in_running_build_message(build)}"
+              elsif with_merge_request.merged_by_shipit?
+                errors << "#{with_name} was already merged by Shipit."
               # Check that both root and with PRs belongs to the same pipeline
               elsif merge_request.stack.pipeline != with_merge_request.stack.pipeline
                 errors << "Pull Request ('#{stack.repository.full_name}/pull/#{with_number}') is not mergable, it belongs to a different Pipeline."
@@ -357,7 +367,50 @@ module Shipit
       Shipit.github.api.add_comment(stack.repository.full_name, number, msg) if msg
     end
 
+    # The predictive build that still tests this pull request, if any. A waiting predictive
+    # merge request of a build that already ended is a leftover, so it is released here.
+    def current_build!
+      predictive_merge_request.waiting.each do |pmr|
+        build = pmr.predictive_branch&.predictive_build
+        return build if build && PredictiveBuild::WIP_STATUSES.include?(build.status)
+        pmr.canceled
+      end
+      nil
+    end
+
+    def ensure_not_in_running_build!
+      build = current_build!
+      raise ArgumentError, "Pull Request ##{number} #{self.class.in_running_build_message(build)}" if build
+    end
+
+    # A cancel during the push merges the commits that the CI tested, but not the commits pushed
+    # after them, so a pull request whose head Shipit has not merged can run again.
+    def merged_by_shipit?
+      completed = predictive_merge_request.completed
+      return false unless completed.exists?
+      return true if merged?
+
+      begin
+        refresh! # The stored head can be older than the last push.
+      rescue Octokit::Error, Faraday::Error => e
+        Rails.logger.warn("Merge request #{id}: could not refresh before /shipit: #{e.message}")
+      end
+      completed.where(head_id: head_id).exists?
+    end
+
+    def self.in_running_build_message(build)
+      minutes = ((Time.now - build.created_at) / 60).to_i
+      "is still in CI #{build.id} (#{build.status}, started #{minutes} minutes ago). " \
+        "If it was canceled, closed or got new commits, Shipit stops that CI within a minute. Try again after that."
+    end
+
     private
+
+    def stop_running_build
+      return unless @left_queue
+      @left_queue = nil
+      ProcessPipelineBuildJob.perform_later(stack.pipeline) if stack.pipeline
+    end
 
     def self.request_merge(stack, number, user)
       now = Time.now.utc

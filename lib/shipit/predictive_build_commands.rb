@@ -38,6 +38,11 @@ module Shipit
       git('push', (force ? '-f' : ''), '-u', 'origin', 'HEAD', chdir: @chdir, env: env)
     end
 
+    # Fails when the target branch moved after the clone, so a commit merged meanwhile is never overwritten.
+    def git_push_to_target
+      git('push', "--force-with-lease=#{@stack.branch}", '-u', 'origin', 'HEAD', chdir: @chdir, env: env)
+    end
+
     def git_reset(to)
       git('reset', '--hard', to, chdir: @chdir, env: env)
     end
