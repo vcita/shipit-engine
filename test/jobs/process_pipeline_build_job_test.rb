@@ -265,5 +265,25 @@ module Shipit
       assert_predicate @build.reload, :canceled?
       assert_predicate @first.reload, :pending?
     end
+
+    test "#create_predictive_branches rejects a pull request that does not merge and branches the others" do
+      build = PredictiveBuild.create!(pipeline: @pipeline, branch: 'PREDICTIVE-BRANCH-2')
+      ok = stub(run!: true)
+      commands = stub(git_clone: ok, git_fetch: ok, git_checkout: ok, git_reset: ok, git_clean: ok)
+      commands.stubs(:git_merge_origin_as_pr).with(@first.branch, @first.number)
+        .returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('merge conflict', 1)) })
+      commands.expects(:git_merge_origin_as_pr).with(@second.branch, @second.number).once.returns(ok)
+      commands.expects(:git_push).with(true).once.returns(ok)
+      Commands.stubs(:for).returns(commands)
+
+      merged = @job.create_predictive_branches(build, [@first, @second])
+
+      assert_equal [@second], merged
+      assert_predicate @first.reload, :rejected?
+      assert_equal 'not_mergeable', @first.rejection_reason
+      branches = build.predictive_branches.to_a
+      assert_equal 1, branches.size
+      assert_equal [@second], branches.first.predictive_merge_requests.map(&:merge_request)
+    end
   end
 end

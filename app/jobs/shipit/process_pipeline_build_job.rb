@@ -271,7 +271,7 @@ module Shipit
               mr.reject!("not_mergeable")
               mr.set_comment(stack_messages[mr.stack_id]) if stack_messages[mr.stack_id]
             end
-            current_merge_request.delete(current_merge_request)
+            merge_requests.delete(current_merge_request)
           end
         end
       end
