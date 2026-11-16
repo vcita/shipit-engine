@@ -32,7 +32,7 @@ module Shipit
 
       candidates = []
       merge_requests.each do |merge_request|
-        next if merge_request.with_merge_requests.any?(&:waiting_for_mergeability?)
+        next if merge_request.with_merge_requests.select(&:pending?).any?(&:waiting_for_mergeability?)
 
         is_rejected = false
         merge_request.with_merge_requests.each do |with_mr|
