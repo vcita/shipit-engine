@@ -45,8 +45,8 @@ module Shipit
       candidates
     end
 
-    # A linked pull request can leave the queue (canceled, closed, rejected) while the root
-    # stays pending. Only pending merge requests can be rejected.
+    # A linked pull request can be canceled, rejected or revalidating while the root stays pending.
+    # Only pending merge requests can be rejected. A revalidating one waits for the next /shipit.
     def reject_with_invalid_merge_requests(merge_request, invalid_with)
       merge_request.reject!('with_merge_request_issue')
       queued_with = merge_request.with_merge_requests.select(&:pending?)
@@ -55,7 +55,7 @@ module Shipit
       linked = invalid_with.map do |with_mr|
         "#{with_mr.stack.repository.full_name}##{with_mr.number} (#{with_mr.merge_status})"
       end
-      msg = "Failed to process your request because a connected pull request is no longer in the merge queue: " \
+      msg = "Failed to process your request because a connected pull request cannot merge now: " \
             "#{linked.join(', ')}.\nComment `/shipit` again with all the connected pull requests."
       ([merge_request] + queued_with).each do |mr|
         Shipit.github.api.add_comment(mr.stack.repository.full_name, mr.number, msg)

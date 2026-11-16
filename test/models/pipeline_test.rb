@@ -90,6 +90,17 @@ module Shipit
       assert_equal 'not_mergeable', @unknown.rejection_reason
     end
 
+    test "#release_candidates rejects a pull request whose linked pull request needs revalidation" do
+      @unknown.update_columns(merge_request_id: @pending.id, merge_status: 'revalidating')
+      linked = "#{@stack.repository.full_name}##{@unknown.number} (revalidating)"
+      Shipit.github.api.expects(:add_comment).with(@stack.repository.full_name, @pending.number, includes(linked))
+
+      refute_includes @pipeline.release_candidates('default'), @pending
+
+      assert_predicate @pending.reload, :rejected?
+      assert_predicate @unknown.reload, :revalidating?
+    end
+
     test "#valid_with_merge_requests leaves out a linked pull request that is no longer queued" do
       @unknown.update_columns(merge_request_id: @pending.id, merge_status: 'canceled', mergeable: false)
       MergeRequest.any_instance.unstub(:reject_unless_mergeable!)
