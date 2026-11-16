@@ -9,6 +9,7 @@ module Shipit
     WAITING_STATUSES = %w(fetching pending).freeze
     QUEUED_STATUSES = %w(pending revalidating).freeze
     REJECTION_REASONS = %w(ci_missing ci_failing merge_conflict requires_rebase with_merge_request_issue not_mergeable).freeze
+    MERGEABILITY_TIMEOUT = 10.minutes
     InvalidTransition = Class.new(StandardError)
     NotReady = Class.new(StandardError)
 
@@ -302,6 +303,17 @@ module Shipit
 
     def not_mergeable_yet?
       mergeable.nil?
+    end
+
+    # After the base branch moves, GitHub returns `mergeable: null` until it computes mergeability again.
+    def waiting_for_mergeability?
+      key = "MergeRequest::mergeable_unknown_since_#{id}"
+      unless not_mergeable_yet?
+        Shipit.redis.del(key)
+        return false
+      end
+      Shipit.redis.set(key, Time.now.to_i, nx: true, ex: 1.day.to_i)
+      Time.now.to_i - Shipit.redis.get(key).to_i < MERGEABILITY_TIMEOUT
     end
 
     def schedule_refresh!
