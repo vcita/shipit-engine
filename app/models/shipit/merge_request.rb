@@ -395,7 +395,8 @@ module Shipit
 
       if count == 1
         set_comment("This pull request does not merge on top of the pull requests before it in " \
-                    "CI #{predictive_build.id}. It stays in the merge queue and Shipit tries it again in the next train.")
+                    "CI #{predictive_build.id}. It stays in the merge queue, and Shipit tries it again " \
+                    "in the next train.")
       end
       true
     end
