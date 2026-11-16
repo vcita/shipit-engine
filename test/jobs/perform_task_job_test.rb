@@ -16,6 +16,10 @@ module Shipit
       @job = PerformTaskJob.new
       @deploy = shipit_deploys(:shipit_pending)
       @stack = shipit_stacks(:shipit)
+
+      # A real `git clone` outlives the test and changes the stack's git cache under the tests that run after it.
+      Command.any_instance.stubs(:start)
+      Command.any_instance.stubs(:run)
     end
 
     test "#perform fetch commits from the API" do
