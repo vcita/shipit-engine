@@ -42,6 +42,22 @@ module Shipit
       assert_predicate @first.reload, :canceled?
     end
 
+    test "#perform stops the CI run step, so it starts no more Jenkins jobs after the stop" do
+      run_task = @branch.predictive_branch_tasks.create!(
+        stack: @stack, predictive_task_type: 'run', allow_concurrency: true, status: 'running'
+      )
+      run_task.ping
+      @first.cancel!
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+
+      @job.perform(@pipeline)
+
+      assert_predicate run_task.reload, :aborting?
+      aborts = []
+      run_task.should_abort? { |count| aborts << count }
+      assert_equal [1], aborts
+    end
+
     test "#perform puts the other pull requests of the stopped build back in the queue" do
       original_requested_at = @second.merge_requested_at
       @first.cancel!

@@ -106,6 +106,8 @@ module Shipit
     def update_status(task)
       task_status = task.status.to_sym
       predictive_task_type = task.predictive_task_type.to_sym
+      # PredictiveBuild#aborting_tasks stops the run step on purpose, so its end is not a CI result.
+      return if predictive_task_type == :run && (tasks_canceling? || tasks_canceled?)
 
       status, jobs, no_match_message = Shipit::PredictiveBuild.parse_task_output(task)
       upsert_ci_job_statuses(jobs) unless predictive_task_type == :run
@@ -182,6 +184,13 @@ module Shipit
     rescue Exception => e
       puts "Shipit::PredictiveBranch#has_ci_tasks? - Error: #{e.message}"
       return false
+    end
+
+    # See PredictiveBuild#abort_run_tasks.
+    def abort_run_tasks
+      predictive_branch_tasks.where(predictive_task_type: 'run', status: Task::ACTIVE_STATUSES).each do |task|
+        task.abort!(aborted_by: Shipit::CommandLineUser.new)
+      end
     end
 
     def trigger_task(run_now = false)
