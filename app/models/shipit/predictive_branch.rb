@@ -323,11 +323,6 @@ module Shipit
         end
       end
       # delete_closed_branch(stack.github_repo_name, branch)
-
-      predictive_merge_requests.blocked.each do |pmr|
-        pmr.merge_request.reject!('merge_conflict')
-        pmr.reject(comment_msg(MERGE_PREDICTIVE_TO_STACK_FAILED))
-      end
     end
 
     def delete_closed_branch(repo_name, branch_name)

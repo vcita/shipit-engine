@@ -63,6 +63,29 @@ module Shipit
       assert_predicate pmr.reload, :pending?
     end
 
+    test "#update_completed_requests leaves a pull request that this build already rejected" do
+      waiting = put_merge_request_in_branch
+      rejected = put_merge_request_in_branch(shipit_merge_requests(:shipit_mergeable_pending_ci))
+      rejected.merge_request.reject!('ci_failing')
+      rejected.rejected
+
+      @branch.update_completed_requests
+
+      assert_predicate waiting.reload, :merged?
+      assert_predicate waiting.merge_request.reload, :merged?
+      assert_predicate rejected.merge_request.reload, :rejected?
+      assert_equal 'ci_failing', rejected.merge_request.rejection_reason
+    end
+
+    test "#update_completed_requests does not reject a pull request that was queued again" do
+      rejected = put_merge_request_in_branch
+      rejected.rejected
+
+      @branch.update_completed_requests
+
+      assert_predicate rejected.merge_request.reload, :pending?
+    end
+
     private
 
     def create_run_task(status:)
@@ -71,8 +94,7 @@ module Shipit
       )
     end
 
-    def put_merge_request_in_branch
-      merge_request = shipit_merge_requests(:shipit_pending)
+    def put_merge_request_in_branch(merge_request = shipit_merge_requests(:shipit_pending))
       MergeRequest.any_instance.stubs(:set_comment)
       PredictiveMergeRequest.create!(merge_request: merge_request, predictive_branch: @branch, head: merge_request.head)
     end
