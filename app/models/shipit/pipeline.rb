@@ -32,6 +32,8 @@ module Shipit
 
       candidates = []
       merge_requests.each do |merge_request|
+        next if merge_request.with_merge_requests.any?(&:waiting_for_mergeability?)
+
         is_rejected = false
         merge_request.with_merge_requests.each do |with_mr|
           is_rejected = true if !valid_with.include? with_mr
@@ -144,6 +146,7 @@ module Shipit
 
       merge_requests.select(&:pending?).each do |merge_request|
         merge_request.refresh!
+        next if merge_request.waiting_for_mergeability?
 
         if !merge_request.not_mergeable_yet? && merge_request.all_status_checks_passed?
           final_merge_requests << merge_request
