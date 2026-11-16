@@ -46,7 +46,9 @@ module Shipit
 
       candidates = []
       merge_requests.each do |merge_request|
-        next if merge_request.with_merge_requests.select(&:pending?).any?(&:waiting_for_mergeability?)
+        queued_with = merge_request.with_merge_requests.select(&:pending?)
+        next if queued_with.any?(&:waiting_for_mergeability?)
+        next if mode == MERGE_MODE_TRAIN && queued_with.any?(&:waiting_for_train_ticket?)
 
         invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
         if invalid_with.any?
@@ -183,6 +185,7 @@ module Shipit
       merge_requests.select(&:pending?).each do |merge_request|
         merge_request.refresh!
         next if merge_request.waiting_for_mergeability?
+        next unless train_ticket?(merge_request, mode)
 
         if !merge_request.not_mergeable_yet? && merge_request.all_status_checks_passed?
           final_merge_requests << merge_request
@@ -208,6 +211,32 @@ module Shipit
       # A canceled or rejected merge request cannot be rejected or revalidated again.
       with_merge_requests = with_merge_requests.uniq.select(&:waiting?)
       remove_invalid_merge_requests(with_merge_requests, mode)
+    end
+
+    # Only a train asks for a ticket. A pull request without a ticket gets no CI and no automation env.
+    def train_ticket?(merge_request, mode)
+      return true unless mode == MERGE_MODE_TRAIN
+
+      state, checks = merge_request.train_ticket
+      merge_request.end_train_ticket_wait unless state == :waiting
+      return true if state == :passed
+
+      names = checks.map { |check| "`#{check}`" }.join(', ')
+      if state == :failed
+        merge_request.reject!('train_ticket_failed')
+        merge_request.set_comment("These train ticket checks failed on the last commit: #{names}. Shipit removed " \
+                                  "this pull request from the merge queue. Fix the checks and comment `/shipit` again.")
+      elsif merge_request.train_ticket_wait_started?
+        merge_request.set_comment("This pull request waits for its train ticket. These checks are not green on the " \
+                                  "last commit: #{names}. Shipit takes the pull request into a train when they pass.")
+      elsif merge_request.train_ticket_timed_out?
+        merge_request.end_train_ticket_wait
+        merge_request.reject!('train_ticket_missing')
+        merge_request.set_comment("These train ticket checks gave no result in " \
+                                  "#{MergeRequest::TRAIN_TICKET_TIMEOUT.inspect}: #{names}. Shipit removed this pull " \
+                                  "request from the merge queue. Comment `/shipit` again when the checks are green.")
+      end
+      false
     end
 
     def train_caps(stack)

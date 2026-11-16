@@ -1144,5 +1144,15 @@ module Shipit
       assert_equal 40, cached.train_max_commits
       assert_in_delta 0.85, cached.train_culprit_confidence
     end
+
+    test "train_ticket_checks is empty without `merge.train.ticket_checks`" do
+      @spec.expects(:load_config).returns('merge' => { 'train' => {} })
+      assert_equal [], @spec.train_ticket_checks
+    end
+
+    test "train_ticket_checks returns `merge.train.ticket_checks`" do
+      @spec.expects(:load_config).returns('merge' => { 'train' => { 'ticket_checks' => %w(lint unit) } })
+      assert_equal %w(lint unit), @spec.train_ticket_checks
+    end
   end
 end

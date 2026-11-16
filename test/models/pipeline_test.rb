@@ -14,6 +14,7 @@ module Shipit
       MergeRequest.any_instance.stubs(:refresh!)
       MergeRequest.any_instance.stubs(:reject_unless_mergeable!).returns(false)
       MergeRequest.any_instance.stubs(:need_revalidation?).returns(false)
+      Commit.any_instance.stubs(:refresh_check_runs!)
     end
 
     test "#remove_invalid_merge_requests keeps a pull request in the queue while GitHub computes its mergeability" do
@@ -187,11 +188,95 @@ module Shipit
       assert_equal Pipeline::MERGE_MODE_TRAIN, Pipeline.default_mode(@stack.reload)
     end
 
+    test "#remove_invalid_merge_requests takes a pull request into a train when its ticket checks are green" do
+      train_config('ticket_checks' => %w(lint unit))
+      ticket_status(@pending, 'lint', 'success')
+      ticket_status(@pending, 'unit', 'success')
+      Shipit.github.api.expects(:add_comment).never
+
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#remove_invalid_merge_requests uses the newest result of a ticket check" do
+      train_config('ticket_checks' => %w(lint))
+      ticket_status(@pending, 'lint', 'failure', created_at: 10.minutes.ago)
+      ticket_status(@pending, 'lint', 'success')
+
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#remove_invalid_merge_requests reads a ticket check from a check run" do
+      train_config('ticket_checks' => %w(lint))
+      @pending.head.check_runs.create!(stack: @stack, name: 'lint', conclusion: 'success', github_id: 77, title: 'ok')
+
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#remove_invalid_merge_requests keeps a pull request in the queue while a ticket check runs, and comments one time" do
+      train_config('ticket_checks' => %w(lint unit))
+      ticket_status(@pending, 'lint', 'success')
+      ticket_status(@pending, 'unit', 'pending')
+      Shipit.github.api.expects(:add_comment).with(@stack.repository.full_name, @pending.number, regexp_matches(/waits for its train ticket.*`unit`/m)).once
+
+      2.times { assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN) }
+
+      assert_predicate @pending.reload, :pending?
+    end
+
+    test "#remove_invalid_merge_requests rejects a pull request when a ticket check failed" do
+      train_config('ticket_checks' => %w(lint unit))
+      ticket_status(@pending, 'lint', 'failure')
+      Shipit.github.api.expects(:add_comment).with(@stack.repository.full_name, @pending.number, regexp_matches(/`lint`/))
+
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+
+      assert_predicate @pending.reload, :rejected?
+      assert_equal 'train_ticket_failed', @pending.rejection_reason
+    end
+
+    test "#remove_invalid_merge_requests rejects a pull request when a ticket check gives no result in time" do
+      train_config('ticket_checks' => %w(lint))
+      Shipit.github.api.stubs(:add_comment)
+      @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+
+      travel(MergeRequest::TRAIN_TICKET_TIMEOUT + 1.minute) do
+        assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+      end
+
+      assert_predicate @pending.reload, :rejected?
+      assert_equal 'train_ticket_missing', @pending.rejection_reason
+    end
+
+    test "#remove_invalid_merge_requests asks for no ticket in single mode" do
+      train_config('ticket_checks' => %w(lint))
+      ticket_status(@pending, 'lint', 'failure')
+
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+    end
+
+    test "#release_candidates skips a root without a rejection while a linked pull request waits for its ticket" do
+      MergeRequest.where(stack: @stack).where.not(id: [@pending.id, @unknown.id]).update_all(merge_status: 'canceled')
+      @unknown.update_columns(merge_request_id: @pending.id, mergeable: true)
+      train_config('ticket_checks' => %w(lint))
+      ticket_status(@pending, 'lint', 'success')
+      ticket_status(@unknown, 'lint', 'pending')
+      Shipit.github.api.stubs(:add_comment)
+
+      assert_empty @pipeline.release_candidates(Pipeline::MERGE_MODE_TRAIN)
+
+      assert_predicate @pending.reload, :pending?
+      assert_predicate @unknown.reload, :pending?
+    end
+
     private
 
     def train_config(train)
       @stack.update!(cached_deploy_spec: DeploySpec.new('merge' => { 'train' => train }))
       [@pending, @unknown].each { |merge_request| merge_request.stack.reload }
+    end
+
+    def ticket_status(merge_request, context, state, created_at: Time.now.utc)
+      merge_request.head.statuses.create!(stack: @stack, context: context, state: state, created_at: created_at)
     end
   end
 end

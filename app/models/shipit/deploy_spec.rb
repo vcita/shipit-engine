@@ -265,6 +265,10 @@ module Shipit
       config('merge', 'train', 'max_commits').to_i
     end
 
+    def train_ticket_checks
+      Array.wrap(config('merge', 'train', 'ticket_checks'))
+    end
+
     def train_culprit_confidence
       (config('merge', 'train', 'culprit_confidence') || TRAIN_DEFAULT_CULPRIT_CONFIDENCE).to_f
     end

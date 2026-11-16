@@ -10,9 +10,11 @@ module Shipit
     QUEUED_STATUSES = %w(pending revalidating).freeze
     REJECTION_REASONS = %w(
       ci_missing ci_failing merge_conflict requires_rebase with_merge_request_issue not_mergeable train_culprit
+      train_ticket_failed train_ticket_missing
     ).freeze
     MERGEABILITY_TIMEOUT = 10.minutes
     MAX_TRAIN_CONFLICTS = 3
+    TRAIN_TICKET_TIMEOUT = 60.minutes
     InvalidTransition = Class.new(StandardError)
     NotReady = Class.new(StandardError)
 
@@ -319,6 +321,42 @@ module Shipit
       Time.now.to_i - Shipit.redis.get(key).to_i < MERGEABILITY_TIMEOUT
     end
 
+    # [:passed | :failed | :waiting, the ticket checks that are not green on the head commit]
+    def train_ticket
+      @train_ticket ||= begin
+        checks = stack.cached_deploy_spec&.train_ticket_checks || []
+        latest = checks.any? && head ? latest_ticket_statuses : {}
+        failed = checks.select { |check| latest[check]&.failure? || latest[check]&.error? }
+        waiting = checks.reject { |check| latest[check]&.success? }
+        if failed.any?
+          [:failed, failed]
+        elsif waiting.any?
+          [:waiting, waiting]
+        else
+          [:passed, []]
+        end
+      end
+    end
+
+    def waiting_for_train_ticket?
+      train_ticket.first == :waiting
+    end
+
+    # True on the first call for a head commit, so the caller can comment one time.
+    def train_ticket_wait_started?
+      Shipit.redis.set(train_ticket_wait_key, Time.now.to_i, nx: true, ex: 1.day.to_i)
+    end
+
+    def train_ticket_timed_out?
+      since = Shipit.redis.get(train_ticket_wait_key)
+      since.present? && Time.now.to_i - since.to_i >= TRAIN_TICKET_TIMEOUT
+    end
+
+    # A later /shipit on the same commit starts a new wait.
+    def end_train_ticket_wait
+      Shipit.redis.del(train_ticket_wait_key)
+    end
+
     def schedule_refresh!
       RefreshMergeRequestJob.perform_later(self)
     end
@@ -336,6 +374,7 @@ module Shipit
       head.refresh_statuses!
       fetched! if fetching?
       @comparison = nil
+      @train_ticket = nil
     end
 
     def github_pull_request=(github_pull_request)
@@ -442,6 +481,21 @@ module Shipit
     end
 
     private
+
+    def train_ticket_wait_key
+      "MergeRequest::train_ticket_waiting_since_#{id}_#{head_id}"
+    end
+
+    # refresh! loads the commit statuses but not the check runs.
+    def latest_ticket_statuses
+      begin
+        head.refresh_check_runs!
+      rescue Octokit::Error, Faraday::Error => e
+        Rails.logger.warn("Merge request #{id}: could not refresh the check runs: #{e.message}")
+      end
+      check_runs = head.check_runs.reload.sort_by { |check_run| -check_run.github_id.to_i }
+      (head.statuses.reload.to_a + check_runs).uniq(&:context).index_by(&:context)
+    end
 
     def stop_running_build
       return unless @left_queue
