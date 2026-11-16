@@ -215,6 +215,8 @@ module Shipit
 
     def task_failed
       failed
+      return if resolve_red_train
+
       reject_predictive_merge_requests(STACK_TASKS_FAILED)
     end
 
@@ -225,7 +227,13 @@ module Shipit
       end
 
       failed
+      return if resolve_red_train
+
       reject_predictive_merge_requests(msg)
+    end
+
+    def resolve_red_train
+      predictive_build.train? && RedTrain.new(predictive_build).resolve_stack_failure(self)
     end
 
     def cancel_predictive_merge_requests(reject_reason = nil)

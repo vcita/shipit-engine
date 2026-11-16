@@ -1120,5 +1120,29 @@ module Shipit
       stack = shipit_stacks(:shipit)
       assert_equal stack.cached_deploy_spec_before_type_cast, DeploySpec.dump(stack.cached_deploy_spec)
     end
+
+    test "train? is false without a `merge.train` section" do
+      @spec.expects(:load_config).returns('merge' => { 'method' => 'merge' })
+      refute_predicate @spec, :train?
+    end
+
+    test "the train caps default to 2 pull requests and no commit limit" do
+      @spec.expects(:load_config).returns('merge' => { 'train' => {} })
+      assert_predicate @spec, :train?
+      assert_equal 2, @spec.train_max_prs
+      assert_equal 0, @spec.train_max_commits
+      assert_in_delta 0.7, @spec.train_culprit_confidence
+    end
+
+    test "the train config survives the cache" do
+      @spec.expects(:load_config).returns(
+        'merge' => { 'train' => { 'max_prs' => 3, 'max_commits' => 40, 'culprit_confidence' => 0.85 } },
+      )
+      cached = DeploySpec.load(DeploySpec.dump(@spec))
+      assert_predicate cached, :train?
+      assert_equal 3, cached.train_max_prs
+      assert_equal 40, cached.train_max_commits
+      assert_in_delta 0.85, cached.train_culprit_confidence
+    end
   end
 end

@@ -169,16 +169,21 @@ module Shipit
       predictive_build = nil
       predictive_build_mode = nil
 
-      Shipit::Pipeline::MERGE_MODES.each do |mode|
-        predictive_build_mode = mode
+      pipeline.build_modes.each do |mode|
         candidates = pipeline.release_candidates(mode)
         next if !candidates || candidates.empty?
 
+        train = mode == Pipeline::MERGE_MODE_TRAIN && candidates.any? { |candidate| candidate.stack.train? }
+        candidates = pipeline.train_passengers(candidates) if train
+
+        # A build of an earlier mode that merged nothing must not stay pending.
+        predictive_build&.completed
+        predictive_build_mode = mode
         predictive_build = PredictiveBuild.create(pipeline: pipeline, branch: "PREDICTIVE-BRANCH-:id")
         predictive_build.update(branch: "PREDICTIVE-BRANCH-#{predictive_build.id}")
 
         limit = Shipit::Pipeline::MERGE_SINGLE_MODES.include?(mode) ? 1 : nil
-        merged_candidates = create_predictive_branches(predictive_build, candidates, limit)
+        merged_candidates = create_predictive_branches(predictive_build, candidates, limit, requeue_conflicts: train)
 
         break if merged_candidates.any?
       end
@@ -190,7 +195,7 @@ module Shipit
         return predictive_build
       end
 
-      predictive_build.update(mode: predictive_build_mode) if predictive_build_mode != Pipeline::MERGE_MODE_DEFAULT
+      predictive_build.update(mode: predictive_build_mode)
       predictive_build.branched
       predictive_build
     end
@@ -209,7 +214,9 @@ module Shipit
 
     # Merge merge_requests into their corresponding predictive-branches
     #   The process will exist once the limit has reached or all merge_requests were processed
-    def create_predictive_branches(predictive_build, merge_requests, limit = nil)
+    # requeue_conflicts: a pull request that does not merge on top of the pull requests before it
+    # stays in the queue. Without them it merges, because GitHub reports it as mergeable.
+    def create_predictive_branches(predictive_build, merge_requests, limit = nil, requeue_conflicts: false)
       merged_stacks = {}
       merged_to_predictive_branch = []
       rejected_merged_requests = []
@@ -251,6 +258,8 @@ module Shipit
           puts "ProcessPipelineBuildJob#create_predictive_branches = failed"
           if current_merge_request
             puts "there is a merge request"
+            requeue = requeue_conflicts && merged_to_predictive_branch.any? &&
+                      current_merge_request.requeue_after_conflict!(predictive_build)
             current_merge_request.with_all do |mr|
               puts "Current MR ID= #{mr.id}"
               rejected_merged_requests << mr
@@ -267,6 +276,8 @@ module Shipit
                 puts "ProcessPipelineBuildJob#create_predictive_branches Delete PredictiveBranch id=#{val.id}"
                 Shipit::PredictiveBranch.delete(val.id)
               end
+              next if requeue
+
               puts "ProcessPipelineBuildJob#create_predictive_branches reject! MergeRequest id=#{mr.id}"
               mr.reject!("not_mergeable")
               mr.set_comment(stack_messages[mr.stack_id]) if stack_messages[mr.stack_id]
@@ -276,7 +287,9 @@ module Shipit
         end
       end
 
-      return create_predictive_branches(predictive_build, merge_requests, limit) if rejected_merged_requests.any? && merge_requests.any?
+      if rejected_merged_requests.any? && merge_requests.any?
+        return create_predictive_branches(predictive_build, merge_requests, limit, requeue_conflicts: requeue_conflicts)
+      end
       return merged_to_predictive_branch unless rejected_merged_requests.any?
       []
     end

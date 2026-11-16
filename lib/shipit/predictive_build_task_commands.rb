@@ -19,12 +19,15 @@ module Shipit
 
     def env
       repos = {}
+      pull_requests = {}
       @task.predictive_build.predictive_branches.each do |p_branch|
         branch_repo = p_branch.stack.repository
         repo_name = "#{branch_repo.owner}/#{branch_repo.name}"
         repos[repo_name] = []
+        pull_requests[repo_name] = []
         p_branch.predictive_merge_requests.waiting.each do |pmr|
           repos[repo_name] << pmr.merge_request.head.sha
+          pull_requests[repo_name] << pmr.merge_request.number
         end
       end
 
@@ -32,7 +35,9 @@ module Shipit
         'BRANCH' => @task.predictive_build.branch,
         'PREDICTIVE_BUILD_ID' => @task.predictive_build.id.to_s,
         'DESTINATION_BRANCH' => @stack.branch,
-        'REPOSITORIES' => Base64.encode64(repos.to_json)
+        'REPOSITORIES' => Base64.encode64(repos.to_json),
+        'PULL_REQUESTS' => Base64.strict_encode64(pull_requests.to_json),
+        'TRAIN' => @task.predictive_build.red_train? ? 'true' : 'false'
       )
     end
 

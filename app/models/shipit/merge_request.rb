@@ -8,8 +8,11 @@ module Shipit
 
     WAITING_STATUSES = %w(fetching pending).freeze
     QUEUED_STATUSES = %w(pending revalidating).freeze
-    REJECTION_REASONS = %w(ci_missing ci_failing merge_conflict requires_rebase with_merge_request_issue not_mergeable).freeze
+    REJECTION_REASONS = %w(
+      ci_missing ci_failing merge_conflict requires_rebase with_merge_request_issue not_mergeable train_culprit
+    ).freeze
     MERGEABILITY_TIMEOUT = 10.minutes
+    MAX_TRAIN_CONFLICTS = 3
     InvalidTransition = Class.new(StandardError)
     NotReady = Class.new(StandardError)
 
@@ -373,6 +376,28 @@ module Shipit
         base_ref,
         head.sha,
       )
+    end
+
+    def commits_count
+      comparison.ahead_by.to_i
+    rescue Octokit::Error, Faraday::Error => e
+      Rails.logger.warn("Merge request #{id}: could not count its commits: #{e.message}")
+      1
+    end
+
+    # A merge that fails for another reason than a conflict with the train would keep the pull
+    # request in the queue for ever, so the retries have a limit.
+    def requeue_after_conflict!(predictive_build)
+      key = "MergeRequest::train_conflicts_#{id}_#{head_id}"
+      count = Shipit.redis.incr(key)
+      Shipit.redis.expire(key, 1.day.to_i)
+      return false if count > MAX_TRAIN_CONFLICTS
+
+      if count == 1
+        set_comment("This pull request does not merge on top of the pull requests before it in " \
+                    "CI #{predictive_build.id}. It stays in the merge queue and Shipit tries it again in the next train.")
+      end
+      true
     end
 
     def set_comment(msg)
