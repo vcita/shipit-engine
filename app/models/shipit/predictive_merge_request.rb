@@ -5,7 +5,6 @@ module Shipit
     belongs_to :head, class_name: 'Shipit::Commit'
 
     scope :waiting, -> { where(status: 'pending') }
-    scope :blocked, -> { where(status: 'rejected') }
     scope :completed, -> { where(status: 'merged') }
 
     state_machine :status, initial: :pending do

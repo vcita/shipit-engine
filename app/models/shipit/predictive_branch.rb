@@ -323,7 +323,6 @@ module Shipit
         end
       end
       # delete_closed_branch(stack.github_repo_name, branch)
-      # Rejected predictive merge requests got their rejection and comment when the build rejected them.
     end
 
     def delete_closed_branch(repo_name, branch_name)
