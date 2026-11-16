@@ -34,27 +34,32 @@ module Shipit
       merge_requests.each do |merge_request|
         next if merge_request.with_merge_requests.select(&:pending?).any?(&:waiting_for_mergeability?)
 
-        is_rejected = false
-        merge_request.with_merge_requests.each do |with_mr|
-          is_rejected = true if !valid_with.include? with_mr
+        invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
+        if invalid_with.any?
+          reject_with_invalid_merge_requests(merge_request, invalid_with)
+        else
+          candidates << merge_request
         end
-
-        if is_rejected
-          merge_request.reject!('with_merge_request_issue')
-          msg = <<~MSG
-            Failed to process your request due to connected pull request issue.
-          MSG
-          merge_request.with_merge_requests.each do |with_mr|
-            with_mr.reject!('with_merge_request_issue')
-            Shipit.github.api.add_comment(with_mr.stack.repository.full_name, with_mr.number, msg)
-          end
-          Shipit.github.api.add_comment(merge_request.stack.repository.full_name, merge_request.number, msg)
-        end
-
-        candidates << merge_request unless is_rejected
       end
 
       candidates
+    end
+
+    # A linked pull request can be canceled, rejected or revalidating while the root stays pending.
+    # Only pending merge requests can be rejected. A revalidating one waits for the next /shipit.
+    def reject_with_invalid_merge_requests(merge_request, invalid_with)
+      merge_request.reject!('with_merge_request_issue')
+      queued_with = merge_request.with_merge_requests.select(&:pending?)
+      queued_with.each { |with_mr| with_mr.reject!('with_merge_request_issue') }
+
+      linked = invalid_with.map do |with_mr|
+        "#{with_mr.stack.repository.full_name}##{with_mr.number} (#{with_mr.merge_status})"
+      end
+      msg = "Failed to process your request because a connected pull request cannot merge now: " \
+            "#{linked.join(', ')}.\nComment `/shipit` again with all the connected pull requests."
+      ([merge_request] + queued_with).each do |mr|
+        Shipit.github.api.add_comment(mr.stack.repository.full_name, mr.number, msg)
+      end
     end
 
     def update_rejected_stacks(mode)
@@ -169,7 +174,8 @@ module Shipit
         with_merge_requests = with_merge_requests | merge_request.with_merge_requests # Array unique
       end
 
-      with_merge_requests = with_merge_requests.uniq
+      # A canceled or rejected merge request cannot be rejected or revalidated again.
+      with_merge_requests = with_merge_requests.uniq.select(&:waiting?)
       remove_invalid_merge_requests(with_merge_requests, mode)
     end
 
