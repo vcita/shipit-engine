@@ -115,6 +115,33 @@ module Shipit
       refute_includes msg, 'Something went wrong'
     end
 
+    test "#reject_predictive_merge_requests keeps the queue place when no task failed" do
+      pmr = put_merge_request_in_branch
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      pmr.merge_request.update!(merge_requested_at: requested_at)
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/keeps its place in the queue/))
+
+      @branch.reject_predictive_merge_requests(PredictiveBranch::STACK_TASKS_FAILED)
+      pmr.merge_request.reload.retry!
+      pmr.merge_request.restore_queue_place!
+
+      assert_equal requested_at, pmr.merge_request.reload.merge_requested_at
+    end
+
+    test "#reject_predictive_merge_requests does not keep the queue place after a failed task" do
+      pmr = put_merge_request_in_branch
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      pmr.merge_request.update!(merge_requested_at: requested_at)
+      CiJobsStatus.create!(predictive_branch_id: @branch.id, name: 'unit_test', status: :failed, link: '//ci/test/1/')
+      MergeRequest.any_instance.expects(:set_comment).with(Not(regexp_matches(/keeps its place/)))
+
+      @branch.reject_predictive_merge_requests(PredictiveBranch::STACK_TASKS_FAILED)
+      pmr.merge_request.reload.retry!
+      pmr.merge_request.restore_queue_place!
+
+      assert_operator pmr.merge_request.reload.merge_requested_at, :>, requested_at
+    end
+
     private
 
     def create_run_task(status:)

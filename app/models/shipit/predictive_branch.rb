@@ -236,11 +236,22 @@ module Shipit
 
     def reject_predictive_merge_requests(reject_reason)
       Rails.logger.info("Predictive branch #{id} rejecting predictive merge requests with reason #{reject_reason}; predictive branch data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]˝")
+      keep_place = reject_reason.in?([STACK_TASKS_FAILED, PIPELINE_TASKS_FAILED]) &&
+                   predictive_build.stopped_without_code_failure?
       predictive_merge_requests.waiting.each do |pmr|
-        pmr.reject(comment_msg(reject_reason))
+        msg = comment_msg(reject_reason)
+        if keep_place
+          ([pmr.merge_request] + pmr.merge_request.with_merge_requests).each(&:keep_queue_place!)
+          msg = "#{msg}\n#{KEPT_QUEUE_PLACE_MSG}"
+        end
+        pmr.reject(msg)
       end
       # delete_closed_branch(stack.github_repo_name, branch)
     end
+
+    KEPT_QUEUE_PLACE_MSG = "No task of this CI reported a failure, so the cause is in Shipit or the CI, " \
+                           "not in your code. Comment `/shipit` to run it again: " \
+                           "the pull request keeps its place in the queue."
 
     def additional_failed_information
       return "Failed to process your request due to CI failures.\n For additional informations, please check the github checks below.\n\nThis can be due to CI failure on another branch, if you think that the error is not related to your code you can try to run /shipit mode:single to run your PR alone (take into account that mode:single is handled only if there are no other PRs to handle so it can take some time during rush hours).\nOtherwise you can just /shipit again. \nFor more informations you can check the [Shipit documentation - Failed due to CI failures.](https://myvcita.atlassian.net/wiki/spaces/IT/pages/2174976098/Shipit+Troubleshooting+Guide#Failed-due-to-CI-failures)" if failed?

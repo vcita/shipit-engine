@@ -416,7 +416,28 @@ module Shipit
         "If it was canceled, closed or got new commits, Shipit stops that CI within a minute. Try again after that."
     end
 
+    # A CI that stopped without a code failure rejects its pull requests. The next /shipit within
+    # this time puts the pull request back at its old place in the queue.
+    KEEP_QUEUE_PLACE_FOR = 1.day
+
+    def keep_queue_place!
+      return unless merge_requested_at
+      # nx: a second failure before the next /shipit keeps the first, older place.
+      Shipit.redis.set(queue_place_key, merge_requested_at.to_f, ex: KEEP_QUEUE_PLACE_FOR.to_i, nx: true)
+    end
+
+    def restore_queue_place!
+      kept = Shipit.redis.get(queue_place_key)
+      return unless kept
+      Shipit.redis.del(queue_place_key)
+      update!(merge_requested_at: Time.at(kept.to_f).utc)
+    end
+
     private
+
+    def queue_place_key
+      "merge_request:#{id}:kept_queue_place"
+    end
 
     def stop_running_build
       return unless @left_queue
@@ -438,7 +459,11 @@ module Shipit
         retry
       end
       merge_request.update!(merge_requested_by: user.presence)
-      merge_request.retry! if merge_request.rejected? || merge_request.canceled? || merge_request.revalidating?
+      if merge_request.rejected? || merge_request.canceled? || merge_request.revalidating?
+        was_rejected = merge_request.rejected?
+        merge_request.retry!
+        merge_request.restore_queue_place! if was_rejected
+      end
       merge_request
     end
 
