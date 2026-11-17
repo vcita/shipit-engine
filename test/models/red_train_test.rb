@@ -57,6 +57,29 @@ module Shipit
       @build.update_status(failed_verify_task(culprit_pr: @first.number, confidence: 0.9, reason: 'It broke login'))
     end
 
+    test "a comment that GitHub refuses does not change the decision for the other pull requests" do
+      MergeRequest.any_instance.stubs(:set_comment).raises(Octokit::BadGateway)
+
+      @build.update_status(failed_verify_task(culprit_pr: @first.number, confidence: 0.9))
+
+      assert_predicate @first.reload, :rejected?
+      assert_predicate @second.reload, :pending?
+      assert_predicate @second_pmr.reload, :canceled?
+      assert_equal RedTrain::DECISION_CULPRIT_REJECTED, @build.reload.train_decision
+    end
+
+    test "no comment goes out when a state change fails" do
+      PredictiveBuild.any_instance.stubs(:update!).raises(ActiveRecord::RecordInvalid)
+      MergeRequest.any_instance.expects(:set_comment).never
+
+      assert_raises(ActiveRecord::RecordInvalid) do
+        RedTrain.new(@build).resolve(failed_verify_task(culprit_pr: @first.number, confidence: 0.9))
+      end
+
+      assert_predicate @first.reload, :pending?
+      assert_predicate @first_pmr.reload, :pending?
+    end
+
     test "an answer below the threshold sends the pull requests to single mode" do
       @build.update_status(failed_verify_task(culprit_pr: @first.number, confidence: 0.4))
 
