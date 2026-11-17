@@ -75,7 +75,8 @@ module Shipit
       @comments.each do |merge_request, msg|
         merge_request.set_comment(msg)
       rescue Octokit::Error, Faraday::Error => e
-        Rails.logger.warn("Predictive build #{@build.id}: no comment on merge request #{merge_request.id}: #{e.message}")
+        Rails.logger.warn("Predictive build #{@build.id}: no comment on merge request #{merge_request.id}: " \
+                          "#{e.message}")
       end
     end
 
