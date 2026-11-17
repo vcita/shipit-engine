@@ -119,7 +119,7 @@ module Shipit
       end
 
       stacks.each do |stack|
-        stack.merge_requests.pending.each do |mr|
+        queue_order(stack.merge_requests.pending).each do |mr|
           unless mr.predictive_merge_request.waiting.any?
             name = stack.repository.full_name
             info[:merge_queue][name] = [] unless info[:merge_queue][name].present?
@@ -129,6 +129,15 @@ module Shipit
       end
 
       info
+    end
+
+    # Builds take the modes in the order of MERGE_MODES, and the oldest request first in a mode.
+    # A linked pull request goes with its root.
+    def queue_order(merge_requests)
+      merge_requests.sort_by do |merge_request|
+        root = merge_request.with_parent_merge_request || merge_request
+        [MERGE_MODES.index(root.mode) || MERGE_MODES.size, root.merge_requested_at, merge_request.id]
+      end
     end
 
     def remove_invalid_merge_requests(merge_requests, mode)

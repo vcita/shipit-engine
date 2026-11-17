@@ -126,5 +126,30 @@ module Shipit
       assert_equal 'with_merge_request_issue', queued.rejection_reason
       assert_predicate @unknown.reload, :canceled?
     end
+
+    test "#stats lists the pending pull requests of a stack in the order of the queue" do
+      by_id = @stack.merge_requests.pending.order(:id).to_a
+      by_id.each_with_index { |mr, index| mr.update_column(:merge_requested_at, (index + 1).minutes.ago) }
+      name = @stack.repository.full_name
+
+      assert_operator by_id.size, :>=, 2
+      assert_equal by_id.reverse.map { |mr| "/#{name}/pull/#{mr.number}" }, @pipeline.stats[:merge_queue][name]
+    end
+
+    test "#stats lists an emergency pull request before the older requests" do
+      @unknown.update_columns(mode: Pipeline::MERGE_MODE_EMERGENCY, merge_requested_at: Time.now.utc)
+      name = @stack.repository.full_name
+
+      assert_equal "/#{name}/pull/#{@unknown.number}", @pipeline.stats[:merge_queue][name].first
+    end
+
+    test "#stats lists a linked pull request at the position of its root" do
+      @unknown.update_columns(merge_request_id: @pending.id, merge_requested_at: Time.now.utc)
+      @pending.update_column(:merge_requested_at, 1.hour.ago)
+      name = @stack.repository.full_name
+
+      links = [@pending, @unknown].map { |mr| "/#{name}/pull/#{mr.number}" }
+      assert_equal links, @pipeline.stats[:merge_queue][name].first(2)
+    end
   end
 end

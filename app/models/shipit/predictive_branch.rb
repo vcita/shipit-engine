@@ -163,10 +163,9 @@ module Shipit
       if jobs.any?
         jobs.each do |name, params|
           begin
-            params[:status] = 'completed' if params[:status] == 'SUCCESS'
             Shipit::CiJobsStatus.create!(predictive_branch_id: self.id,
                                          name: params[:job_name],
-                                         status: params[:status].downcase.to_sym,
+                                         status: CiJobsStatus.status_for(params[:status]),
                                          link: params[:link])
           rescue Exception => e
             puts "--------- upsert_ci_job_statuses:: failed to create CiJobsStatus. Error: #{e.message}"
@@ -249,9 +248,8 @@ module Shipit
       predictive_build.predictive_branches.each do |p_build_branch|
         failed_branches << p_build_branch if p_build_branch.failed?
       end
-      if failed_branches.empty?
-        return "Something went wrong, please start over."
-      end
+      return stopped_ci_information if failed_branches.empty?
+
       res = []
       res << "We had to start over, we failed to process your request due to CI failures of the following projects: "
       failed_branches.each do |fb|
@@ -262,6 +260,22 @@ module Shipit
         end
       end
       res
+    end
+
+    # The jobs that stopped the CI when no branch failed: a pipeline job in most cases.
+    # A failed job aborts the other jobs, so the aborted jobs count only when no job failed.
+    def stopped_ci_information
+      jobs = predictive_build.ci_jobs_statuses + predictive_build.predictive_branches.flat_map(&:ci_jobs_statuses)
+      stopped = jobs.select(&:failed?).presence || jobs.select(&:aborted?)
+      if stopped.empty?
+        return "CI #{predictive_build.id} stopped, and no task reported a failure. Comment `/shipit` to start over."
+      end
+
+      res = ["CI #{predictive_build.id} stopped because of the following tasks:"]
+      stopped.each { |job| res << "* #{job.name} (#{job.status}) - [#{job.link}](#{job.link})" }
+      res << ""
+      res << "Comment `/shipit` to start over."
+      res.join("\n")
     end
 
     def comment_msg(step)
