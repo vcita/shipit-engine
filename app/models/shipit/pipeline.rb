@@ -150,7 +150,7 @@ module Shipit
       end
 
       stacks.each do |stack|
-        stack.merge_requests.pending.each do |mr|
+        queue_order(stack.merge_requests.pending).each do |mr|
           unless mr.predictive_merge_request.waiting.any?
             name = stack.repository.full_name
             info[:merge_queue][name] = [] unless info[:merge_queue][name].present?
@@ -160,6 +160,42 @@ module Shipit
       end
 
       info
+    end
+
+    # Builds take the modes in the order of MERGE_MODES, and the oldest request first in a mode.
+    # A linked pull request goes with its root.
+    def queue_order(merge_requests)
+      merge_requests.sort_by do |merge_request|
+        root = merge_request.with_parent_merge_request || merge_request
+        [MERGE_MODES.index(root.mode) || MERGE_MODES.size, root.merge_requested_at, merge_request.id]
+      end
+    end
+
+    ETA_SAMPLE_SIZE = 10
+
+    # The reply to /shipit: the place of the pull request in the queue that the next builds use,
+    # and a merge time from the recent build durations of this pipeline.
+    def queue_message(merge_request)
+      root = merge_request.with_parent_merge_request || merge_request
+      wip = build_in_progress
+      queued = queued_roots
+      return "Shipit starts the CI for this pull request within a minute." if !wip && queued.first == root
+
+      ahead = queued.index(root) || queued.size
+      msg = ["This pull request is number #{ahead + 1} in the merge queue."]
+      if wip
+        elapsed = ((Time.now - wip.created_at) / 60).to_i
+        msg << "CI #{wip.id} runs now (started #{elapsed} minutes ago)."
+      end
+      minutes = typical_build_minutes
+      if minutes
+        remaining = wip ? [minutes - elapsed, 1].max : 0
+        start = Time.now.utc + (remaining + ahead * minutes).minutes
+        msg << "Expected CI start: about #{start.strftime('%H:%M')} UTC. " \
+               "Expected merge: about #{(start + minutes.minutes).strftime('%H:%M')} UTC " \
+               "(a CI takes about #{minutes} minutes)."
+      end
+      msg.join(" ")
     end
 
     def remove_invalid_merge_requests(merge_requests, mode)
@@ -226,6 +262,21 @@ module Shipit
       Pipeline.find_each do |pipeline|
         ProcessPipelineBuildJob.perform_later(pipeline)
       end
+    end
+
+    private
+
+    # Roots that wait for a build. Each build takes one root and its linked pull requests.
+    def queued_roots
+      queue_order(merge_requests.pending.root.to_a).reject { |mr| mr.predictive_merge_request.waiting.any? }
+    end
+
+    def typical_build_minutes
+      builds = predictive_builds.where(status: 'completed').order(id: :desc).limit(ETA_SAMPLE_SIZE)
+      durations = builds.map { |build| (build.updated_at - build.created_at) / 60 }
+      return if durations.empty?
+
+      durations.sort[durations.size / 2].round
     end
   end
 end
