@@ -6,7 +6,7 @@ module Shipit
   module Webhooks
     module Handlers
       module PullRequest
-        class TrainTicketHandlerTest < ActiveSupport::TestCase
+        class TicketHandlerTest < ActiveSupport::TestCase
           SHA = 'b' * 40
 
           setup do
@@ -18,13 +18,13 @@ module Shipit
           end
 
           test "a push starts the ticket checks of the new commit" do
-            StartTrainTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62').once
+            StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62').once
 
             process('synchronize')
           end
 
           test "an opened, reopened or ready pull request starts the ticket checks" do
-            StartTrainTicketJob.expects(:perform_later).times(3)
+            StartTicketJob.expects(:perform_later).times(3)
 
             process('opened', sha: 'c' * 40)
             process('reopened', sha: 'd' * 40)
@@ -32,7 +32,7 @@ module Shipit
           end
 
           test "a draft, another action or another base branch starts nothing" do
-            StartTrainTicketJob.expects(:perform_later).never
+            StartTicketJob.expects(:perform_later).never
 
             process('synchronize', draft: true)
             process('labeled')
@@ -41,7 +41,7 @@ module Shipit
 
           test "a stack without ticket checks starts nothing" do
             @stack.update!(cached_deploy_spec: DeploySpec.new('merge' => { 'train' => {} }))
-            StartTrainTicketJob.expects(:perform_later).never
+            StartTicketJob.expects(:perform_later).never
 
             process('synchronize')
           end
@@ -55,7 +55,7 @@ module Shipit
             payload['pull_request']['head']['sha'] = sha
             payload['pull_request']['head']['ref'] = 'feature-62'
             payload['pull_request']['base']['ref'] = base
-            TrainTicketHandler.new(payload).process
+            TicketHandler.new(payload).process
           end
         end
       end

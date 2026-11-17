@@ -3,8 +3,8 @@
 module Shipit
   # Starts the ticket checks of one commit of a pull request: the `ci.ticket.run` steps of the
   # stack's shipit.yml. The steps report their results as GitHub checks on that commit, and
-  # MergeRequest#train_ticket reads them.
-  class TrainTicketRun
+  # MergeRequest#ticket reads them.
+  class TicketRun
     # The steps do not start a second Jenkins build for a commit whose build still runs. After
     # this time a new request starts the steps again, for a build that Jenkins lost.
     RETRY_AFTER = 15.minutes
@@ -19,12 +19,12 @@ module Shipit
       return false unless configured?(stack)
       return false unless Shipit.redis.set(key(stack, sha), Time.now.to_i, nx: true, ex: RETRY_AFTER.to_i)
 
-      StartTrainTicketJob.perform_later(stack, sha, branch)
+      StartTicketJob.perform_later(stack, sha, branch)
       true
     end
 
     def self.key(stack, sha)
-      "TrainTicketRun::#{stack.id}_#{sha}"
+      "TicketRun::#{stack.id}_#{sha}"
     end
 
     def initialize(stack, sha, branch)

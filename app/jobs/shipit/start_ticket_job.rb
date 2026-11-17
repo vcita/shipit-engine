@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 module Shipit
-  class StartTrainTicketJob < BackgroundJob
+  class StartTicketJob < BackgroundJob
     queue_as :default
 
     def perform(stack, sha, branch)
-      TrainTicketRun.new(stack, sha, branch).run
+      TicketRun.new(stack, sha, branch).run
     end
   end
 end

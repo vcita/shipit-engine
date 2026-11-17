@@ -48,7 +48,7 @@ module Shipit
       merge_requests.each do |merge_request|
         queued_with = merge_request.with_merge_requests.select(&:pending?)
         next if queued_with.any?(&:waiting_for_mergeability?)
-        next if mode != MERGE_MODE_EMERGENCY && queued_with.any?(&:waiting_for_train_ticket?)
+        next if mode != MERGE_MODE_EMERGENCY && queued_with.any?(&:waiting_for_ticket?)
 
         invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
         if invalid_with.any?
@@ -185,7 +185,7 @@ module Shipit
       merge_requests.select(&:pending?).each do |merge_request|
         merge_request.refresh!
         next if merge_request.waiting_for_mergeability?
-        next unless train_ticket?(merge_request, mode)
+        next unless ticket?(merge_request, mode)
 
         if !merge_request.not_mergeable_yet? && merge_request.all_status_checks_passed?
           final_merge_requests << merge_request
@@ -214,31 +214,31 @@ module Shipit
     end
 
     # A pull request without a ticket gets no CI and no automation env. An emergency merge skips the ticket.
-    def train_ticket?(merge_request, mode)
+    def ticket?(merge_request, mode)
       return true if mode == MERGE_MODE_EMERGENCY
 
-      state, checks, missing = merge_request.train_ticket
-      merge_request.end_train_ticket_wait unless state == :waiting
+      state, checks, missing = merge_request.ticket
+      merge_request.end_ticket_wait unless state == :waiting
       return true if state == :passed
 
       # A pull request that was open before the stack got its ticket checks, or whose checks Jenkins lost.
       if state == :waiting && missing.any? && merge_request.head
-        TrainTicketRun.request(merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch)
+        TicketRun.request(merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch)
       end
 
       names = checks.map { |check| "`#{check}`" }.join(', ')
       if state == :failed
-        merge_request.reject!('train_ticket_failed')
+        merge_request.reject!('ticket_failed')
         merge_request.set_comment("These ticket checks failed on the last commit: #{names}. Shipit removed " \
                                   "this pull request from the merge queue. Fix the checks and comment `/shipit` again.")
-      elsif merge_request.train_ticket_wait_started?
+      elsif merge_request.ticket_wait_started?
         merge_request.set_comment("This pull request waits for its ticket. These checks are not green on the " \
                                   "last commit: #{names}. Shipit starts the CI of the pull request when they pass.")
-      elsif merge_request.train_ticket_timed_out?
-        merge_request.end_train_ticket_wait
-        merge_request.reject!('train_ticket_missing')
+      elsif merge_request.ticket_timed_out?
+        merge_request.end_ticket_wait
+        merge_request.reject!('ticket_missing')
         merge_request.set_comment("These ticket checks gave no result in " \
-                                  "#{MergeRequest::TRAIN_TICKET_TIMEOUT.inspect}: #{names}. Shipit removed this pull " \
+                                  "#{MergeRequest::TICKET_TIMEOUT.inspect}: #{names}. Shipit removed this pull " \
                                   "request from the merge queue. Comment `/shipit` again when the checks are green.")
       end
       false

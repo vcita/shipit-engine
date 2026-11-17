@@ -6,7 +6,7 @@ module Shipit
       module PullRequest
         # Starts the ticket checks on each new commit of a pull request, so the ticket is ready
         # when someone comments /shipit. A draft gets its checks when it is marked ready.
-        class TrainTicketHandler < Shipit::Webhooks::Handlers::Handler
+        class TicketHandler < Shipit::Webhooks::Handlers::Handler
           ACTIONS = %w(opened reopened synchronize ready_for_review).freeze
 
           params do
@@ -32,7 +32,7 @@ module Shipit
             return if params.pull_request.draft
 
             stacks.where(branch: params.pull_request.base.ref, merge_queue_enabled: true).each do |stack|
-              TrainTicketRun.request(stack, sha: params.pull_request.head.sha, branch: params.pull_request.head.ref)
+              TicketRun.request(stack, sha: params.pull_request.head.sha, branch: params.pull_request.head.ref)
             end
           end
         end

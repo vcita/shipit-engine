@@ -227,7 +227,7 @@ module Shipit
       ticket_config(%w(lint unit))
       ticket_status(@pending, 'lint', 'pending')
       Shipit.github.api.stubs(:add_comment)
-      TrainTicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
     end
@@ -236,7 +236,7 @@ module Shipit
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'pending')
       Shipit.github.api.stubs(:add_comment)
-      TrainTicketRun.expects(:request).never
+      TicketRun.expects(:request).never
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
     end
@@ -249,7 +249,7 @@ module Shipit
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
 
       assert_predicate @pending.reload, :rejected?
-      assert_equal 'train_ticket_failed', @pending.rejection_reason
+      assert_equal 'ticket_failed', @pending.rejection_reason
     end
 
     test "#remove_invalid_merge_requests rejects a pull request when a ticket check gives no result in time" do
@@ -257,12 +257,12 @@ module Shipit
       Shipit.github.api.stubs(:add_comment)
       @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
 
-      travel(MergeRequest::TRAIN_TICKET_TIMEOUT + 1.minute) do
+      travel(MergeRequest::TICKET_TIMEOUT + 1.minute) do
         assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
       end
 
       assert_predicate @pending.reload, :rejected?
-      assert_equal 'train_ticket_missing', @pending.rejection_reason
+      assert_equal 'ticket_missing', @pending.rejection_reason
     end
 
     test "#remove_invalid_merge_requests asks for a ticket in single mode, without a train config" do
@@ -271,7 +271,7 @@ module Shipit
       Shipit.github.api.stubs(:add_comment)
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
-      assert_equal 'train_ticket_failed', @pending.reload.rejection_reason
+      assert_equal 'ticket_failed', @pending.reload.rejection_reason
       assert_equal Pipeline::MERGE_MODE_SINGLE, Pipeline.default_mode(@stack.reload)
     end
 
@@ -286,7 +286,7 @@ module Shipit
       ticket_config(%w(lint))
       @pending.head.check_runs.create!(stack: @stack, name: 'lint', conclusion: 'cancelled', github_id: 78, title: 'stopped')
       Shipit.github.api.stubs(:add_comment)
-      TrainTicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
       assert_predicate @pending.reload, :pending?
@@ -296,10 +296,10 @@ module Shipit
       ticket_config(%w(lint))
       @pending.head.check_runs.create!(
         stack: @stack, name: 'lint', conclusion: nil, github_id: 79, title: 'running',
-        created_at: (MergeRequest::TRAIN_TICKET_TIMEOUT + 1.minute).ago,
+        created_at: (MergeRequest::TICKET_TIMEOUT + 1.minute).ago,
       )
       Shipit.github.api.stubs(:add_comment)
-      TrainTicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
       assert_predicate @pending.reload, :pending?
@@ -308,25 +308,25 @@ module Shipit
     test "a rejection for another reason ends the ticket wait too" do
       ticket_config(%w(lint))
       Shipit.github.api.stubs(:add_comment)
-      TrainTicketRun.stubs(:request)
+      TicketRun.stubs(:request)
       @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
 
       @pending.reject!('requires_rebase')
 
-      refute_predicate @pending, :train_ticket_timed_out?
-      assert_predicate @pending, :train_ticket_wait_started?
+      refute_predicate @pending, :ticket_timed_out?
+      assert_predicate @pending, :ticket_wait_started?
     end
 
     test "a cancel ends the ticket wait, so the next /shipit on the same commit waits the full time again" do
       ticket_config(%w(lint))
       Shipit.github.api.stubs(:add_comment)
-      TrainTicketRun.stubs(:request)
+      TicketRun.stubs(:request)
       @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
 
       @pending.cancel!
 
-      refute_predicate @pending, :train_ticket_timed_out?
-      assert_predicate @pending, :train_ticket_wait_started?
+      refute_predicate @pending, :ticket_timed_out?
+      assert_predicate @pending, :ticket_wait_started?
     end
 
     test "#release_candidates skips a root without a rejection while a linked pull request waits for its ticket" do
