@@ -151,5 +151,55 @@ module Shipit
       links = [@pending, @unknown].map { |mr| "/#{name}/pull/#{mr.number}" }
       assert_equal links, @pipeline.stats[:merge_queue][name].first(2)
     end
+
+    test "#queue_message says the CI starts now when no CI runs and no pull request waits before it" do
+      queue_in_order(@pending)
+
+      assert_equal "Shipit starts the CI for this pull request within a minute.", @pipeline.queue_message(@pending)
+    end
+
+    test "#queue_message gives the place in the queue and the expected times" do
+      travel_to(Time.utc(2026, 11, 17, 12, 0)) do
+        queue_in_order(@unknown, @pending)
+        finished_build(minutes: 40)
+        finished_build(minutes: 50)
+        finished_build(minutes: 60)
+        running = PredictiveBuild.create!(pipeline: @pipeline, branch: 'PREDICTIVE-BRANCH-RUNNING', created_at: 10.minutes.ago)
+        running.tasks_running
+
+        msg = @pipeline.queue_message(@pending)
+
+        # 40 minutes left in the running CI, then one CI for @unknown.
+        assert_includes msg, "number 2 in the merge queue"
+        assert_includes msg, "CI #{running.id} runs now (started 10 minutes ago)"
+        assert_includes msg, "Expected CI start: about 13:30 UTC"
+        assert_includes msg, "Expected merge: about 14:20 UTC (a CI takes about 50 minutes)"
+      end
+    end
+
+    test "#queue_message gives no times before a CI of the pipeline finished" do
+      queue_in_order(@unknown, @pending)
+
+      msg = @pipeline.queue_message(@pending)
+
+      assert_includes msg, "number 2 in the merge queue"
+      refute_includes msg, "Expected"
+    end
+
+    private
+
+    # The given pull requests first, in this order, before the other pending ones.
+    def queue_in_order(*merge_requests)
+      @stack.merge_requests.pending.update_all(mode: Pipeline::MERGE_MODE_SINGLE, merge_requested_at: 1.hour.ago)
+      merge_requests.each_with_index do |mr, index|
+        mr.update_column(:merge_requested_at, (10 - index).days.ago)
+      end
+    end
+
+    def finished_build(minutes:)
+      build = PredictiveBuild.create!(pipeline: @pipeline, branch: 'PREDICTIVE-BRANCH-DONE')
+      build.completed
+      build.update_columns(created_at: 1.day.ago, updated_at: 1.day.ago + minutes.minutes)
+    end
   end
 end
