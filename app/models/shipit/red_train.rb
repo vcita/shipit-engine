@@ -23,6 +23,7 @@ module Shipit
 
     def initialize(predictive_build)
       @build = predictive_build
+      @comments = []
     end
 
     # The pipeline CI tested all the pull requests together.
@@ -33,22 +34,24 @@ module Shipit
       rest = roots - [culprit]
       second_red = rest.any? { |root| red_train_before?(root) }
 
-      if culprit
-        decision = DECISION_CULPRIT_REJECTED
-        reject_culprit(culprit, named, answer)
-        second_red ? run_alone(rest, DECISION_SECOND_RED) : run_in_next_train(rest, culprit)
-      elsif second_red
-        decision = DECISION_SECOND_RED
-        run_alone(rest, decision)
-      elsif confident?(answer) && answer['culprit_pr'].nil?
-        decision = DECISION_NO_CULPRIT
-        run_in_next_train(rest, nil)
-      else
-        decision = DECISION_LOW_CONFIDENCE
-        run_alone(rest, decision)
-      end
+      decide do
+        if culprit
+          decision = DECISION_CULPRIT_REJECTED
+          reject_culprit(culprit, named, answer)
+          second_red ? run_alone(rest, DECISION_SECOND_RED) : run_in_next_train(rest, culprit)
+        elsif second_red
+          decision = DECISION_SECOND_RED
+          run_alone(rest, decision)
+        elsif confident?(answer) && answer['culprit_pr'].nil?
+          decision = DECISION_NO_CULPRIT
+          run_in_next_train(rest, nil)
+        else
+          decision = DECISION_LOW_CONFIDENCE
+          run_alone(rest, decision)
+        end
 
-      @build.update!(culprit_finder_answer: answer&.to_json, train_decision: decision, culprit_merge_request: named)
+        @build.update!(culprit_finder_answer: answer&.to_json, train_decision: decision, culprit_merge_request: named)
+      end
     end
 
     # The stack CI tested only the pull requests of one stack, and the culprit finder does not read it.
@@ -56,12 +59,30 @@ module Shipit
       failed = predictive_branch.predictive_merge_requests.waiting.map { |pmr| root_of(pmr.merge_request) }.uniq
       return false if failed.size < 2
 
-      run_alone(failed, DECISION_STACK_CI)
-      @build.update!(train_decision: DECISION_STACK_CI)
+      decide do
+        run_alone(failed, DECISION_STACK_CI)
+        @build.update!(train_decision: DECISION_STACK_CI)
+      end
       true
     end
 
     private
+
+    # Every state change is saved before the first comment. A comment that GitHub refuses would
+    # else leave pull requests waiting, and the failed build then rejects them.
+    def decide
+      ActiveRecord::Base.transaction { yield }
+      @comments.each do |merge_request, msg|
+        merge_request.set_comment(msg)
+      rescue Octokit::Error, Faraday::Error => e
+        Rails.logger.warn("Predictive build #{@build.id}: no comment on merge request #{merge_request.id}: " \
+                          "#{e.message}")
+      end
+    end
+
+    def comment(pmr, msg)
+      @comments << [pmr.merge_request, msg]
+    end
 
     def waiting
       @waiting ||= PredictiveMergeRequest.waiting.where(predictive_branch: @build.predictive_branches).to_a
@@ -117,21 +138,27 @@ module Shipit
 
     def reject_culprit(culprit, named, answer)
       group_pmrs(culprit).each do |pmr|
-        msg = pmr.merge_request == named ? culprit_comment(answer) : linked_culprit_comment(named)
-        pmr.reject(msg, reason: 'train_culprit')
+        comment(pmr, pmr.merge_request == named ? culprit_comment(answer) : linked_culprit_comment(named))
+        pmr.reject(nil, reason: 'train_culprit')
       end
     end
 
     def run_in_next_train(roots, culprit)
       roots.each do |root|
-        group_pmrs(root).each { |pmr| pmr.cancel(next_train_comment(culprit)) }
+        group_pmrs(root).each do |pmr|
+          comment(pmr, next_train_comment(culprit))
+          pmr.cancel(nil)
+        end
       end
     end
 
     def run_alone(roots, decision)
       roots.each do |root|
         group(root).each { |mr| mr.update!(mode: Pipeline::MERGE_MODE_SINGLE) }
-        group_pmrs(root).each { |pmr| pmr.cancel(alone_comment(decision)) }
+        group_pmrs(root).each do |pmr|
+          comment(pmr, alone_comment(decision))
+          pmr.cancel(nil)
+        end
       end
     end
 

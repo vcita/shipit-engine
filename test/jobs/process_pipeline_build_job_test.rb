@@ -335,7 +335,21 @@ module Shipit
       assert_predicate @second.reload, :rejected?
     end
 
-    test "#generate_predictive_build records the mode of the build and passes the train caps" do
+    test "#generate_predictive_build records the mode of a build that has a branch" do
+      @build.cancel
+      @pipeline.stubs(:build_modes).returns([Pipeline::MERGE_MODE_SINGLE])
+      @pipeline.stubs(:release_candidates).with(Pipeline::MERGE_MODE_SINGLE).returns([@first])
+      @job.stubs(:create_predictive_branches).with do |build, *|
+        PredictiveBranch.create!(predictive_build: build, branch: build.branch, stack: @stack, stack_commit: shipit_commits(:fifth))
+      end.returns([@first])
+
+      build = @job.generate_predictive_build(@pipeline)
+
+      assert_equal Pipeline::MERGE_MODE_SINGLE, build.reload.mode
+      assert_predicate build, :branched?
+    end
+
+    test "#generate_predictive_build passes the train caps to a train" do
       Stack.any_instance.stubs(:train?).returns(true)
       @build.cancel
       @pipeline.stubs(:release_candidates).returns([])
@@ -345,7 +359,6 @@ module Shipit
 
       build = @job.generate_predictive_build(@pipeline)
 
-      assert_equal Pipeline::MERGE_MODE_TRAIN, build.mode
       assert_predicate build, :completed?
     end
 
