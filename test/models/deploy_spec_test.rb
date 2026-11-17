@@ -408,6 +408,39 @@ module Shipit
       assert_equal config, @spec.cacheable.config
     end
 
+    test "#release_status_context names the environment when shipit.yml sets the context to true" do
+      @spec.stubs(:load_config).returns('status' => { 'context' => [true] })
+
+      assert_predicate @spec, :release_status?
+      assert_equal 'shipit/env', @spec.release_status_context
+      assert_equal 'shipit/env', @spec.cacheable.release_status_context
+    end
+
+    test "#release_status_context keeps a string context" do
+      @spec.stubs(:load_config).returns('status' => { 'context' => 'deploy/production' })
+
+      assert_equal 'deploy/production', @spec.release_status_context
+    end
+
+    test "#release_status? is false when shipit.yml sets the context to false" do
+      @spec.stubs(:load_config).returns('status' => { 'context' => [false] })
+
+      refute_predicate @spec, :release_status?
+    end
+
+    test "#cacheable ignores the release status context in the merge and CI checks" do
+      @spec.stubs(:load_config).returns(
+        'status' => { 'context' => [true] },
+        'merge' => { 'ignore' => ['continuous-integration/jenkins/branch'] },
+      )
+
+      cached = @spec.cacheable
+
+      assert_includes cached.merge_request_ignored_statuses, 'continuous-integration/jenkins/branch'
+      assert_includes cached.merge_request_ignored_statuses, 'shipit/env'
+      assert_includes cached.hidden_statuses, 'shipit/env'
+    end
+
     test "#deploy_variables returns an empty array by default" do
       assert_equal [], @spec.deploy_variables
     end
