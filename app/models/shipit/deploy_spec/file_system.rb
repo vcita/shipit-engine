@@ -20,6 +20,12 @@ module Shipit
         DeploySpec.new(cacheable_config)
       end
 
+      # shipit.yml files turn release statuses on with `context: [true]`. GitHub needs a string context.
+      def release_status_context
+        context = Array.wrap(super).first
+        context == true ? "shipit/#{@env}" : context.presence
+      end
+
       def file(path, root: false)
         if root || directory.blank?
           @app_dir.join(path)
