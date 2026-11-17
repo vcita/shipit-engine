@@ -292,6 +292,31 @@ module Shipit
       assert_predicate @pending.reload, :pending?
     end
 
+    test "#remove_invalid_merge_requests starts the checks again when a ticket check stays in progress too long" do
+      ticket_config(%w(lint))
+      @pending.head.check_runs.create!(
+        stack: @stack, name: 'lint', conclusion: nil, github_id: 79, title: 'running',
+        created_at: (MergeRequest::TRAIN_TICKET_TIMEOUT + 1.minute).ago,
+      )
+      Shipit.github.api.stubs(:add_comment)
+      TrainTicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+      assert_predicate @pending.reload, :pending?
+    end
+
+    test "a rejection for another reason ends the ticket wait too" do
+      ticket_config(%w(lint))
+      Shipit.github.api.stubs(:add_comment)
+      TrainTicketRun.stubs(:request)
+      @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+
+      @pending.reject!('requires_rebase')
+
+      refute_predicate @pending, :train_ticket_timed_out?
+      assert_predicate @pending, :train_ticket_wait_started?
+    end
+
     test "a cancel ends the ticket wait, so the next /shipit on the same commit waits the full time again" do
       ticket_config(%w(lint))
       Shipit.github.api.stubs(:add_comment)

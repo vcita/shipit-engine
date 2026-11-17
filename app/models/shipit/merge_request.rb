@@ -135,6 +135,9 @@ module Shipit
 
       after_transition any => :canceled do |mr|
         mr.instance_variable_set(:@left_queue, true)
+      end
+
+      after_transition any => %i(canceled rejected) do |mr|
         mr.end_train_ticket_wait
       end
     end
@@ -499,8 +502,13 @@ module Shipit
       end
       check_runs = head.check_runs.reload.sort_by { |check_run| -check_run.github_id.to_i }
       latest = (head.statuses.reload.to_a + check_runs).uniq(&:context).index_by(&:context)
-      # A canceled run is not a result of the commit: a newer build replaced it, or someone stopped it.
-      latest.reject { |_, status| status.is_a?(CheckRun) && status.conclusion.in?(%w(cancelled stale)) }
+      latest.reject do |_, status|
+        # A canceled run is not a result of the commit: a newer build replaced it, or someone stopped it.
+        canceled = status.is_a?(CheckRun) && status.conclusion.in?(%w(cancelled stale))
+        # A build that Jenkins lost never reports its end, so its check stays in progress for ever.
+        lost = status.pending? && status.created_at < TRAIN_TICKET_TIMEOUT.ago
+        canceled || lost
+      end
     end
 
     def stop_running_build
