@@ -217,9 +217,14 @@ module Shipit
     def train_ticket?(merge_request, mode)
       return true unless mode == MERGE_MODE_TRAIN
 
-      state, checks = merge_request.train_ticket
+      state, checks, missing = merge_request.train_ticket
       merge_request.end_train_ticket_wait unless state == :waiting
       return true if state == :passed
+
+      # A pull request that was open before the stack got its ticket checks, or whose checks Jenkins lost.
+      if state == :waiting && missing.any? && merge_request.head
+        TrainTicketRun.request(merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch)
+      end
 
       names = checks.map { |check| "`#{check}`" }.join(', ')
       if state == :failed

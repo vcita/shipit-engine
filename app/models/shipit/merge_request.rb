@@ -321,19 +321,21 @@ module Shipit
       Time.now.to_i - Shipit.redis.get(key).to_i < MERGEABILITY_TIMEOUT
     end
 
-    # [:passed | :failed | :waiting, the ticket checks that are not green on the head commit]
+    # [:passed | :failed | :waiting, the ticket checks that are not green on the head commit,
+    # the ticket checks without a result or a run on the head commit]
     def train_ticket
       @train_ticket ||= begin
         checks = stack.cached_deploy_spec&.train_ticket_checks || []
         latest = checks.any? && head ? latest_ticket_statuses : {}
         failed = checks.select { |check| latest[check]&.failure? || latest[check]&.error? }
         waiting = checks.reject { |check| latest[check]&.success? }
+        missing = checks.reject { |check| latest.key?(check) }
         if failed.any?
-          [:failed, failed]
+          [:failed, failed, missing]
         elsif waiting.any?
-          [:waiting, waiting]
+          [:waiting, waiting, missing]
         else
-          [:passed, []]
+          [:passed, [], []]
         end
       end
     end

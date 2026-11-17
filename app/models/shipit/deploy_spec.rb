@@ -193,6 +193,10 @@ module Shipit
       ci_pipeline[step] || {}
     end
 
+    def ci_ticket_steps
+      Array.wrap(config('ci', 'ticket', 'run'))
+    end
+
     def hidden_statuses
       Array.wrap(config('ci', 'hide')) + [release_status_context].compact
     end

@@ -1154,5 +1154,16 @@ module Shipit
       @spec.expects(:load_config).returns('merge' => { 'train' => { 'ticket_checks' => %w(lint unit) } })
       assert_equal %w(lint unit), @spec.train_ticket_checks
     end
+
+    test "ci_ticket_steps returns `ci.ticket.run` and survives the cache" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => { 'run' => ['start unit_test'] } })
+      assert_equal ['start unit_test'], @spec.ci_ticket_steps
+      assert_equal ['start unit_test'], DeploySpec.load(DeploySpec.dump(@spec)).ci_ticket_steps
+    end
+
+    test "ci_ticket_steps is empty without `ci.ticket`" do
+      @spec.expects(:load_config).returns({})
+      assert_equal [], @spec.ci_ticket_steps
+    end
   end
 end

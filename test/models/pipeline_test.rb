@@ -223,6 +223,24 @@ module Shipit
       assert_predicate @pending.reload, :pending?
     end
 
+    test "#remove_invalid_merge_requests starts the ticket checks that have no run on the last commit" do
+      train_config('ticket_checks' => %w(lint unit))
+      ticket_status(@pending, 'lint', 'pending')
+      Shipit.github.api.stubs(:add_comment)
+      TrainTicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#remove_invalid_merge_requests starts no ticket checks while every check runs" do
+      train_config('ticket_checks' => %w(lint))
+      ticket_status(@pending, 'lint', 'pending')
+      Shipit.github.api.stubs(:add_comment)
+      TrainTicketRun.expects(:request).never
+
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
     test "#remove_invalid_merge_requests rejects a pull request when a ticket check failed" do
       train_config('ticket_checks' => %w(lint unit))
       ticket_status(@pending, 'lint', 'failure')
