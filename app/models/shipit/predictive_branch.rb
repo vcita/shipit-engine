@@ -163,10 +163,9 @@ module Shipit
       if jobs.any?
         jobs.each do |name, params|
           begin
-            params[:status] = 'completed' if params[:status] == 'SUCCESS'
             Shipit::CiJobsStatus.create!(predictive_branch_id: self.id,
                                          name: params[:job_name],
-                                         status: params[:status].downcase.to_sym,
+                                         status: CiJobsStatus.status_for(params[:status]),
                                          link: params[:link])
           rescue Exception => e
             puts "--------- upsert_ci_job_statuses:: failed to create CiJobsStatus. Error: #{e.message}"
@@ -245,11 +244,22 @@ module Shipit
 
     def reject_predictive_merge_requests(reject_reason)
       Rails.logger.info("Predictive branch #{id} rejecting predictive merge requests with reason #{reject_reason}; predictive branch data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]˝")
+      keep_place = reject_reason.in?([STACK_TASKS_FAILED, PIPELINE_TASKS_FAILED]) &&
+                   predictive_build.stopped_without_code_failure?
       predictive_merge_requests.waiting.each do |pmr|
-        pmr.reject(comment_msg(reject_reason))
+        msg = comment_msg(reject_reason)
+        if keep_place
+          ([pmr.merge_request] + pmr.merge_request.with_merge_requests).each(&:keep_queue_place!)
+          msg = "#{msg}\n#{KEPT_QUEUE_PLACE_MSG}"
+        end
+        pmr.reject(msg)
       end
       # delete_closed_branch(stack.github_repo_name, branch)
     end
+
+    KEPT_QUEUE_PLACE_MSG = "No task of this CI reported a failure, so the cause is in Shipit or the CI, " \
+                           "not in your code. Comment `/shipit` to run it again: " \
+                           "the pull request keeps its place in the queue."
 
     def additional_failed_information
       return "Failed to process your request due to CI failures.\n For additional informations, please check the github checks below.\n\nThis can be due to CI failure on another branch, if you think that the error is not related to your code you can try to run /shipit mode:single to run your PR alone (take into account that mode:single is handled only if there are no other PRs to handle so it can take some time during rush hours).\nOtherwise you can just /shipit again. \nFor more informations you can check the [Shipit documentation - Failed due to CI failures.](https://myvcita.atlassian.net/wiki/spaces/IT/pages/2174976098/Shipit+Troubleshooting+Guide#Failed-due-to-CI-failures)" if failed?
@@ -257,9 +267,8 @@ module Shipit
       predictive_build.predictive_branches.each do |p_build_branch|
         failed_branches << p_build_branch if p_build_branch.failed?
       end
-      if failed_branches.empty?
-        return "Something went wrong, please start over."
-      end
+      return stopped_ci_information if failed_branches.empty?
+
       res = []
       res << "We had to start over, we failed to process your request due to CI failures of the following projects: "
       failed_branches.each do |fb|
@@ -270,6 +279,22 @@ module Shipit
         end
       end
       res
+    end
+
+    # The jobs that stopped the CI when no branch failed: a pipeline job in most cases.
+    # A failed job aborts the other jobs, so the aborted jobs count only when no job failed.
+    def stopped_ci_information
+      jobs = predictive_build.ci_jobs_statuses + predictive_build.predictive_branches.flat_map(&:ci_jobs_statuses)
+      stopped = jobs.select(&:failed?).presence || jobs.select(&:aborted?)
+      if stopped.empty?
+        return "CI #{predictive_build.id} stopped, and no task reported a failure. Comment `/shipit` to start over."
+      end
+
+      res = ["CI #{predictive_build.id} stopped because of the following tasks:"]
+      stopped.each { |job| res << "* #{job.name} (#{job.status}) - [#{job.link}](#{job.link})" }
+      res << ""
+      res << "Comment `/shipit` to start over."
+      res.join("\n")
     end
 
     def comment_msg(step)
@@ -331,11 +356,6 @@ module Shipit
         end
       end
       # delete_closed_branch(stack.github_repo_name, branch)
-
-      predictive_merge_requests.blocked.each do |pmr|
-        pmr.merge_request.reject!('merge_conflict')
-        pmr.reject(comment_msg(MERGE_PREDICTIVE_TO_STACK_FAILED))
-      end
     end
 
     def delete_closed_branch(repo_name, branch_name)

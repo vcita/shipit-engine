@@ -5,6 +5,14 @@ module Shipit
     belongs_to :predictive_build, optional: true
     belongs_to :predictive_branch, optional: true
 
+    # Jenkins results that have another name here.
+    REPORTED_STATUSES = { 'success' => 'completed', 'failure' => 'failed' }.freeze
+
+    def self.status_for(reported)
+      status = reported.to_s.downcase
+      REPORTED_STATUSES.fetch(status, status)
+    end
+
     state_machine :status, initial: :running do
       state :running
       state :failed
@@ -56,7 +64,7 @@ module Shipit
       when :running
         running
         return
-      when :failed
+      when :failed, :failure
         failed
         return
       when :aborted

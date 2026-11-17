@@ -257,7 +257,7 @@ module Shipit
         jobs.each do |name, params|
           Shipit::CiJobsStatus.create!(predictive_build_id: self.id,
                                        name: params[:job_name],
-                                       status: params[:status].downcase.to_sym,
+                                       status: CiJobsStatus.status_for(params[:status]),
                                        link: params[:link])
         end
       end
@@ -358,6 +358,12 @@ module Shipit
       end
       cancel
       aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_LEFT_QUEUE)
+    end
+
+    # No CI task reported a failure: the status check lost the build, a task was lost (eviction,
+    # restart) or the verify polls failed. A failure in the tested code always marks a task failed.
+    def stopped_without_code_failure?
+      (ci_jobs_statuses + predictive_branches.flat_map(&:ci_jobs_statuses)).none?(&:failed?)
     end
 
     def target_branch_moved?

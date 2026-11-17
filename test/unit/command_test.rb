@@ -90,6 +90,14 @@ module Shipit
       assert_equal 'terminated with exit status 1', command.termination_status
     end
 
+    test '#run! keeps the output of a failed command on the error' do
+      command = Command.new('echo "! [rejected] master (stale info)"; exit 1', chdir: '.')
+
+      error = assert_raises(Command::Failed) { command.run! }
+
+      assert_includes error.output, '! [rejected] master (stale info)'
+    end
+
     test 'handles externally signalled commands correctly' do
       command = Command.new('sleep 10', chdir: '.')
       t = command_signaller_thread(command)
