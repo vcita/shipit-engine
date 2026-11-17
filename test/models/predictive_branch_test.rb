@@ -51,6 +51,53 @@ module Shipit
       assert_predicate pmr.reload, :pending?
     end
 
+    test "#update_status runs the abort again when the run step ends after the stop" do
+      pmr = put_merge_request_in_branch
+      @branch.tasks_canceling
+
+      assert_enqueued_with(job: PerformTaskJob) do
+        @branch.update_status(create_run_task(status: 'aborted'))
+      end
+
+      assert_equal 1, abort_tasks.count
+      assert_predicate @branch.reload, :tasks_canceling?
+      assert_predicate pmr.reload, :pending?
+    end
+
+    test "#update_status runs a failed abort again" do
+      @branch.tasks_canceling
+
+      @branch.update_status(create_abort_task(status: 'failed'))
+
+      assert_equal 2, abort_tasks.count
+    end
+
+    test "a cleanup abort records the jobs and changes no status" do
+      @branch.tasks_canceled
+      cleanup = @branch.schedule_cleanup_abort
+      cleanup.update!(status: 'success')
+      cleanup.write("job_name:unit_test link:https://ci/job/1/ status:ABORTED id:1\n")
+
+      @branch.update_status(cleanup)
+
+      assert_predicate @branch.reload, :tasks_canceled?
+      assert_equal %w(aborted), @branch.ci_jobs_statuses.map(&:status)
+      assert_equal 1, abort_tasks.count
+    end
+
+    test "a failed cleanup abort runs again, at most #{CleanupAbort::MAX_CLEANUP_ABORTS} times" do
+      @branch.tasks_canceled
+      task = @branch.schedule_cleanup_abort
+      while task
+        task.update!(status: 'failed')
+        @branch.update_status(task)
+        task = abort_tasks.where.not(status: 'failed').last
+      end
+
+      assert_equal CleanupAbort::MAX_CLEANUP_ABORTS, abort_tasks.count
+      assert_predicate @branch.reload, :tasks_canceled?
+    end
+
     test "#abort_run_tasks ends a run task that never started without failing the branch" do
       pmr = put_merge_request_in_branch
       @branch.tasks_canceling
@@ -148,6 +195,16 @@ module Shipit
       @branch.predictive_branch_tasks.create!(
         stack: @stack, predictive_task_type: 'run', allow_concurrency: true, status: status
       )
+    end
+
+    def create_abort_task(status:)
+      @branch.predictive_branch_tasks.create!(
+        stack: @stack, predictive_task_type: 'abort', allow_concurrency: true, status: status
+      )
+    end
+
+    def abort_tasks
+      @branch.predictive_branch_tasks.where(predictive_task_type: 'abort')
     end
 
     def put_merge_request_in_branch(merge_request = shipit_merge_requests(:shipit_pending))

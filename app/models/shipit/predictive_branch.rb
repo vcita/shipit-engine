@@ -4,6 +4,7 @@ module Shipit
   class PredictiveBranch < Record
     include VerifyPollStrikes
     include LostTaskReport
+    include CleanupAbort
     belongs_to :predictive_build
     belongs_to :stack
     has_many :predictive_branch_tasks
@@ -107,7 +108,12 @@ module Shipit
       task_status = task.status.to_sym
       predictive_task_type = task.predictive_task_type.to_sym
       # PredictiveBuild#aborting_tasks stops the run step on purpose, so its end is not a CI result.
-      return if predictive_task_type == :run && (tasks_canceling? || tasks_canceled?)
+      # The run step can start a Jenkins job after the abort step, so the abort runs again.
+      if predictive_task_type == :run && (tasks_canceling? || tasks_canceled?)
+        schedule_cleanup_abort if task.finished?
+        return
+      end
+      return cleanup_abort_ended(task) if cleanup_abort?(task)
 
       status, jobs, no_match_message = Shipit::PredictiveBuild.parse_task_output(task)
       upsert_ci_job_statuses(jobs) unless predictive_task_type == :run
@@ -122,6 +128,7 @@ module Shipit
 
       unless [:success, :pending, :running].include? task_status
         return run_task_failed(task) if predictive_task_type == :run
+        schedule_cleanup_abort if predictive_task_type == :abort
         # Only a LOST poll (reaped as zombie => :error, hung => :timedout) is
         # tolerated with strikes — it says nothing about the CI itself and the
         # next cron tick re-polls anyway. A :failed poll is the script exiting
@@ -183,6 +190,14 @@ module Shipit
     rescue Exception => e
       puts "Shipit::PredictiveBranch#has_ci_tasks? - Error: #{e.message}"
       return false
+    end
+
+    def cleanup_abort_tasks
+      predictive_branch_tasks
+    end
+
+    def cleanup_abort_stack
+      stack
     end
 
     # See PredictiveBuild#abort_run_tasks.
