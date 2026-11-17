@@ -182,7 +182,8 @@ module Shipit
       wip = build_in_progress
       queued = queued_roots
       if !wip && queued.first == root
-        return ["Shipit starts the CI for this pull request within a minute.", ticket_message(merge_request)].compact.join(" ")
+        start = "Shipit starts the CI for this pull request within a minute."
+        return [start, ticket_message(merge_request)].compact.join(" ")
       end
 
       ahead = queued.index(root) || queued.size
