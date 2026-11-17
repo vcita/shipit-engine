@@ -181,7 +181,9 @@ module Shipit
       root = merge_request.with_parent_merge_request || merge_request
       wip = build_in_progress
       queued = queued_roots
-      return "Shipit starts the CI for this pull request within a minute." if !wip && queued.first == root
+      if !wip && queued.first == root
+        return ["Shipit starts the CI for this pull request within a minute.", ticket_message(merge_request)].compact.join(" ")
+      end
 
       ahead = queued.index(root) || queued.size
       msg = ["This pull request is number #{ahead + 1} in the merge queue."]
@@ -197,7 +199,16 @@ module Shipit
                "Expected merge: about #{(start + minutes.minutes).strftime('%H:%M')} UTC " \
                "(a CI takes about #{minutes} minutes)."
       end
-      msg.join(" ")
+      msg << ticket_message(merge_request)
+      msg.compact.join(" ")
+    end
+
+    # The reply to /shipit must not promise a CI that waits for the ticket.
+    def ticket_message(merge_request)
+      checks = merge_request.stack.cached_deploy_spec&.ticket_checks || []
+      return if checks.empty? || merge_request.mode == MERGE_MODE_EMERGENCY
+
+      "The CI starts only when these checks are green on the last commit: #{checks.map { |c| "`#{c}`" }.join(', ')}."
     end
 
     def remove_invalid_merge_requests(merge_requests, mode)

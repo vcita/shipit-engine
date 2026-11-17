@@ -393,6 +393,23 @@ module Shipit
       end
     end
 
+    test "#queue_message names the ticket checks of a stack that asks for a ticket" do
+      queue_in_order(@pending)
+      ticket_config(%w(lint unit))
+
+      msg = @pipeline.queue_message(@pending.reload)
+
+      assert_includes msg, "The CI starts only when these checks are green on the last commit: `lint`, `unit`."
+    end
+
+    test "#queue_message names no ticket checks for an emergency merge" do
+      queue_in_order(@pending)
+      ticket_config(%w(lint))
+      @pending.update_column(:mode, Pipeline::MERGE_MODE_EMERGENCY)
+
+      refute_includes @pipeline.queue_message(@pending.reload), "checks are green"
+    end
+
     test "#queue_message gives no times before a CI of the pipeline finished" do
       queue_in_order(@unknown, @pending)
 
