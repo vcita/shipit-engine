@@ -63,7 +63,7 @@ module Shipit
 
       TrainTicketRun.new(@stack, SHA, 'feature-62').run
 
-      assert File.exist?(marker)
+      assert_predicate Pathname.new(marker), :exist?
     ensure
       FileUtils.rm_f(marker)
     end
