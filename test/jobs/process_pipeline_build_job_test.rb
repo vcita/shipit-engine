@@ -200,6 +200,33 @@ module Shipit
       assert_predicate @second.reload, :pending?
     end
 
+    test "#push_build logs the git output when the push fails" do
+      @build.waiting_for_merging
+      error = Command::Failed.new('git push terminated with exit status 1', 1)
+      error.output = "remote: error: GH006: Protected branch update failed for refs/heads/master.\n"
+      commands = mock
+      commands.expects(:git_push_to_target).returns(stub.tap { |s| s.stubs(:run!).raises(error) })
+      Rails.logger.stubs(:error)
+      Rails.logger.expects(:error).with(includes('GH006: Protected branch update failed'))
+
+      assert_empty @job.push_build(@build, { @stack => commands })
+      assert_predicate @build.reload, :merging_failed?
+    end
+
+    test "#merge_predictive_branches logs the git output when a git command fails" do
+      @build.waiting_for_merging
+      error = Command::Failed.new('git merge --ff-only terminated with exit status 128', 128)
+      error.output = "fatal: Not possible to fast-forward, aborting.\n"
+      merge = stub.tap { |s| s.stubs(:run!).raises(error) }
+      Commands.stubs(:for).returns(stub(git_clone: stub(run!: true), git_fetch: stub(run!: true), git_merge_ff: merge))
+      Rails.logger.stubs(:error)
+      Rails.logger.expects(:error).with(includes('Not possible to fast-forward'))
+
+      @job.merge_predictive_branches(@build, Dir.tmpdir)
+
+      assert_predicate @build.reload, :merging_failed?
+    end
+
     test "#merge_build rejects the pull requests when the push fails and the target did not move" do
       @build.waiting_for_merging
       commands = mock
