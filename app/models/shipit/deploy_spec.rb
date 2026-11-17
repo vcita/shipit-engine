@@ -269,8 +269,9 @@ module Shipit
       config('merge', 'train', 'max_commits').to_i
     end
 
-    def train_ticket_checks
-      Array.wrap(config('merge', 'train', 'ticket_checks'))
+    # Not under `merge.train`: a stack can ask for a ticket before it runs trains.
+    def ticket_checks
+      Array.wrap(config('merge', 'ticket_checks'))
     end
 
     def train_culprit_confidence

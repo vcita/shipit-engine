@@ -135,6 +135,7 @@ module Shipit
 
       after_transition any => :canceled do |mr|
         mr.instance_variable_set(:@left_queue, true)
+        mr.end_train_ticket_wait
       end
     end
 
@@ -325,7 +326,7 @@ module Shipit
     # the ticket checks without a result or a run on the head commit]
     def train_ticket
       @train_ticket ||= begin
-        checks = stack.cached_deploy_spec&.train_ticket_checks || []
+        checks = stack.cached_deploy_spec&.ticket_checks || []
         latest = checks.any? && head ? latest_ticket_statuses : {}
         failed = checks.select { |check| latest[check]&.failure? || latest[check]&.error? }
         waiting = checks.reject { |check| latest[check]&.success? }
@@ -497,7 +498,9 @@ module Shipit
         Rails.logger.warn("Merge request #{id}: could not refresh the check runs: #{e.message}")
       end
       check_runs = head.check_runs.reload.sort_by { |check_run| -check_run.github_id.to_i }
-      (head.statuses.reload.to_a + check_runs).uniq(&:context).index_by(&:context)
+      latest = (head.statuses.reload.to_a + check_runs).uniq(&:context).index_by(&:context)
+      # A canceled run is not a result of the commit: a newer build replaced it, or someone stopped it.
+      latest.reject { |_, status| status.is_a?(CheckRun) && status.conclusion.in?(%w(cancelled stale)) }
     end
 
     def stop_running_build

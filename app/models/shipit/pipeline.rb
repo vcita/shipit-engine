@@ -48,7 +48,7 @@ module Shipit
       merge_requests.each do |merge_request|
         queued_with = merge_request.with_merge_requests.select(&:pending?)
         next if queued_with.any?(&:waiting_for_mergeability?)
-        next if mode == MERGE_MODE_TRAIN && queued_with.any?(&:waiting_for_train_ticket?)
+        next if mode != MERGE_MODE_EMERGENCY && queued_with.any?(&:waiting_for_train_ticket?)
 
         invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
         if invalid_with.any?
@@ -213,9 +213,9 @@ module Shipit
       remove_invalid_merge_requests(with_merge_requests, mode)
     end
 
-    # Only a train asks for a ticket. A pull request without a ticket gets no CI and no automation env.
+    # A pull request without a ticket gets no CI and no automation env. An emergency merge skips the ticket.
     def train_ticket?(merge_request, mode)
-      return true unless mode == MERGE_MODE_TRAIN
+      return true if mode == MERGE_MODE_EMERGENCY
 
       state, checks, missing = merge_request.train_ticket
       merge_request.end_train_ticket_wait unless state == :waiting
@@ -229,15 +229,15 @@ module Shipit
       names = checks.map { |check| "`#{check}`" }.join(', ')
       if state == :failed
         merge_request.reject!('train_ticket_failed')
-        merge_request.set_comment("These train ticket checks failed on the last commit: #{names}. Shipit removed " \
+        merge_request.set_comment("These ticket checks failed on the last commit: #{names}. Shipit removed " \
                                   "this pull request from the merge queue. Fix the checks and comment `/shipit` again.")
       elsif merge_request.train_ticket_wait_started?
-        merge_request.set_comment("This pull request waits for its train ticket. These checks are not green on the " \
-                                  "last commit: #{names}. Shipit takes the pull request into a train when they pass.")
+        merge_request.set_comment("This pull request waits for its ticket. These checks are not green on the " \
+                                  "last commit: #{names}. Shipit starts the CI of the pull request when they pass.")
       elsif merge_request.train_ticket_timed_out?
         merge_request.end_train_ticket_wait
         merge_request.reject!('train_ticket_missing')
-        merge_request.set_comment("These train ticket checks gave no result in " \
+        merge_request.set_comment("These ticket checks gave no result in " \
                                   "#{MergeRequest::TRAIN_TICKET_TIMEOUT.inspect}: #{names}. Shipit removed this pull " \
                                   "request from the merge queue. Comment `/shipit` again when the checks are green.")
       end

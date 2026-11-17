@@ -11,7 +11,7 @@ module Shipit
 
     def self.configured?(stack)
       spec = stack.cached_deploy_spec
-      spec.present? && spec.train? && spec.train_ticket_checks.any? && spec.ci_ticket_steps.any?
+      spec.present? && spec.ticket_checks.any? && spec.ci_ticket_steps.any?
     end
 
     # Returns true when it started the steps for this commit.

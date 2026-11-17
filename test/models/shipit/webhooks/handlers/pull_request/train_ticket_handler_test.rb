@@ -12,7 +12,7 @@ module Shipit
           setup do
             @stack = shipit_stacks(:shipit)
             @stack.update!(merge_queue_enabled: true, cached_deploy_spec: DeploySpec.new(
-              'merge' => { 'train' => { 'ticket_checks' => %w(unit_test-ticket) } },
+              'merge' => { 'ticket_checks' => %w(unit_test-ticket) },
               'ci' => { 'ticket' => { 'run' => ['echo start'] } },
             ))
           end

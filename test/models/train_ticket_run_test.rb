@@ -83,7 +83,7 @@ module Shipit
 
     def configure(ticket)
       @stack.update!(cached_deploy_spec: DeploySpec.new(
-        'merge' => { 'train' => { 'ticket_checks' => ticket['ticket_checks'] } },
+        'merge' => { 'ticket_checks' => ticket['ticket_checks'] },
         'ci' => { 'ticket' => { 'run' => ticket['run'] } },
       ))
     end

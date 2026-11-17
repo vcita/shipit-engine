@@ -1145,14 +1145,16 @@ module Shipit
       assert_in_delta 0.85, cached.train_culprit_confidence
     end
 
-    test "train_ticket_checks is empty without `merge.train.ticket_checks`" do
+    test "ticket_checks is empty without `merge.ticket_checks`" do
       @spec.expects(:load_config).returns('merge' => { 'train' => {} })
-      assert_equal [], @spec.train_ticket_checks
+      assert_equal [], @spec.ticket_checks
     end
 
-    test "train_ticket_checks returns `merge.train.ticket_checks`" do
-      @spec.expects(:load_config).returns('merge' => { 'train' => { 'ticket_checks' => %w(lint unit) } })
-      assert_equal %w(lint unit), @spec.train_ticket_checks
+    test "ticket_checks returns `merge.ticket_checks`, and does not turn on the train" do
+      @spec.expects(:load_config).returns('merge' => { 'ticket_checks' => %w(lint unit) })
+      assert_equal %w(lint unit), @spec.ticket_checks
+      refute_predicate @spec, :train?
+      assert_equal %w(lint unit), DeploySpec.load(DeploySpec.dump(@spec)).ticket_checks
     end
 
     test "ci_ticket_steps returns `ci.ticket.run` and survives the cache" do
