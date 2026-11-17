@@ -17,6 +17,7 @@ module Shipit
 
     class Failed < Error
       attr_reader :exit_code
+      attr_accessor :output
 
       def initialize(message, exit_code)
         super(message)
@@ -74,6 +75,9 @@ module Shipit
         output << out
       end
       output.join
+    rescue Failed => error
+      error.output = output.join
+      raise
     end
 
     def interpolated_arguments

@@ -322,7 +322,9 @@ module Shipit
           stack_commands[p_branch.stack].git_fetch(p_branch.branch).run!
           stack_commands[p_branch.stack].git_merge_ff(p_branch.branch).run!
         end
-      rescue
+      rescue => e
+        Rails.logger.error("Predictive build #{predictive_build.id}: could not merge the predictive branches: " \
+                           "#{command_error_details(e)}")
         predictive_build.merging_failed
       end
 
@@ -338,7 +340,7 @@ module Shipit
           stack_commands[p_branch.stack].git_push_to_target.run!
         rescue Command::Error => e
           Rails.logger.error("Predictive build #{predictive_build.id}: could not push #{p_branch.branch} " \
-                             "to #{p_branch.stack.branch}: #{e.message}")
+                             "to #{p_branch.stack.branch}: #{command_error_details(e)}")
           predictive_build.merging_failed
           return pushed
         end
@@ -364,6 +366,12 @@ module Shipit
     end
 
     private
+
+    # git prints the reason for a failure last.
+    def command_error_details(error)
+      output = error.try(:output).to_s.strip
+      output.empty? ? error.message : "#{error.message}\n#{output.last(2000)}"
+    end
 
     def with_all(merge_request)
       [merge_request] + merge_request.with_merge_requests
