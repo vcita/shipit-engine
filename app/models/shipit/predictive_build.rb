@@ -245,7 +245,7 @@ module Shipit
         jobs.each do |name, params|
           Shipit::CiJobsStatus.create!(predictive_build_id: self.id,
                                        name: params[:job_name],
-                                       status: params[:status].downcase.to_sym,
+                                       status: CiJobsStatus.status_for(params[:status]),
                                        link: params[:link])
         end
       end

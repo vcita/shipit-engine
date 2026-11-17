@@ -86,6 +86,35 @@ module Shipit
       assert_predicate rejected.merge_request.reload, :pending?
     end
 
+    test "#comment_msg names the failed tasks of a CI without a failed branch" do
+      build = @branch.predictive_build
+      CiJobsStatus.create!(predictive_build_id: build.id, name: 'common_automation', status: :failed, link: '//ci/gate/1/')
+      CiJobsStatus.create!(predictive_build_id: build.id, name: 'common_build', status: :completed, link: '//ci/build/1/')
+      CiJobsStatus.create!(predictive_branch_id: @branch.id, name: 'unit_test', status: :aborted, link: '//ci/test/1/')
+
+      msg = @branch.comment_msg(PredictiveBranch::PIPELINE_TASKS_FAILED)
+
+      assert_includes msg, "* common_automation (failed) - [//ci/gate/1/](//ci/gate/1/)"
+      refute_includes msg, 'common_build'
+      refute_includes msg, 'unit_test'
+    end
+
+    test "#comment_msg names the aborted tasks when no task failed" do
+      CiJobsStatus.create!(predictive_branch_id: @branch.id, name: 'unit_test', status: :aborted, link: '//ci/test/1/')
+      @branch.tasks_canceled
+
+      msg = @branch.comment_msg(PredictiveBranch::STACK_TASKS_FAILED)
+
+      assert_includes msg, "* unit_test (aborted) - [//ci/test/1/](//ci/test/1/)"
+    end
+
+    test "#comment_msg names the CI when no task failed or was aborted" do
+      msg = @branch.comment_msg(PredictiveBranch::PIPELINE_TASKS_FAILED)
+
+      assert_includes msg, "CI #{@branch.predictive_build.id} stopped"
+      refute_includes msg, 'Something went wrong'
+    end
+
     private
 
     def create_run_task(status:)
