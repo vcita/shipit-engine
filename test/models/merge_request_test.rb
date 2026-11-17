@@ -82,6 +82,42 @@ module Shipit
       assert_empty @pr.predictive_merge_request.waiting
     end
 
+    test ".request_merge! puts a rejected pull request back at its kept queue place" do
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      @pr.update!(merge_requested_at: requested_at)
+      @pr.keep_queue_place!
+      @pr.reject!('ci_failing')
+
+      MergeRequest.request_merge!(@stack, @pr.number, @user)
+
+      assert_predicate @pr.reload, :pending?
+      assert_equal requested_at, @pr.merge_requested_at
+    end
+
+    test ".request_merge! uses the kept queue place only once" do
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      @pr.update!(merge_requested_at: requested_at)
+      @pr.keep_queue_place!
+      @pr.reject!('ci_failing')
+      MergeRequest.request_merge!(@stack, @pr.number, @user)
+      @pr.reload.reject!('ci_failing')
+
+      MergeRequest.request_merge!(@stack, @pr.number, @user)
+
+      assert_in_delta Time.now.utc, @pr.reload.merge_requested_at, 2
+    end
+
+    test ".request_merge! does not restore a kept place for a pull request canceled by its owner" do
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      @pr.update!(merge_requested_at: requested_at)
+      @pr.keep_queue_place!
+      @pr.cancel!
+
+      MergeRequest.request_merge!(@stack, @pr.number, @user)
+
+      assert_in_delta Time.now.utc, @pr.reload.merge_requested_at, 2
+    end
+
     test ".request_merge! accepts new commits on a pull request that left the queue while Shipit merged it" do
       put_in_build(status: :completed)
       PredictiveMergeRequest.where(merge_request: @pr).each(&:merged)

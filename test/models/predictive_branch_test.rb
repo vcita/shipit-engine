@@ -63,6 +63,85 @@ module Shipit
       assert_predicate pmr.reload, :pending?
     end
 
+    test "#update_completed_requests leaves a pull request that this build already rejected" do
+      waiting = put_merge_request_in_branch
+      rejected = put_merge_request_in_branch(shipit_merge_requests(:shipit_mergeable_pending_ci))
+      rejected.merge_request.reject!('ci_failing')
+      rejected.rejected
+
+      @branch.update_completed_requests
+
+      assert_predicate waiting.reload, :merged?
+      assert_predicate waiting.merge_request.reload, :merged?
+      assert_predicate rejected.merge_request.reload, :rejected?
+      assert_equal 'ci_failing', rejected.merge_request.rejection_reason
+    end
+
+    test "#update_completed_requests does not reject a pull request that was queued again" do
+      rejected = put_merge_request_in_branch
+      rejected.rejected
+
+      @branch.update_completed_requests
+
+      assert_predicate rejected.merge_request.reload, :pending?
+    end
+
+    test "#comment_msg names the failed tasks of a CI without a failed branch" do
+      build = @branch.predictive_build
+      CiJobsStatus.create!(predictive_build_id: build.id, name: 'common_automation', status: :failed, link: '//ci/gate/1/')
+      CiJobsStatus.create!(predictive_build_id: build.id, name: 'common_build', status: :completed, link: '//ci/build/1/')
+      CiJobsStatus.create!(predictive_branch_id: @branch.id, name: 'unit_test', status: :aborted, link: '//ci/test/1/')
+
+      msg = @branch.comment_msg(PredictiveBranch::PIPELINE_TASKS_FAILED)
+
+      assert_includes msg, "* common_automation (failed) - [//ci/gate/1/](//ci/gate/1/)"
+      refute_includes msg, 'common_build'
+      refute_includes msg, 'unit_test'
+    end
+
+    test "#comment_msg names the aborted tasks when no task failed" do
+      CiJobsStatus.create!(predictive_branch_id: @branch.id, name: 'unit_test', status: :aborted, link: '//ci/test/1/')
+      @branch.tasks_canceled
+
+      msg = @branch.comment_msg(PredictiveBranch::STACK_TASKS_FAILED)
+
+      assert_includes msg, "* unit_test (aborted) - [//ci/test/1/](//ci/test/1/)"
+    end
+
+    test "#comment_msg names the CI when no task failed or was aborted" do
+      msg = @branch.comment_msg(PredictiveBranch::PIPELINE_TASKS_FAILED)
+
+      assert_includes msg, "CI #{@branch.predictive_build.id} stopped"
+      refute_includes msg, 'Something went wrong'
+    end
+
+    test "#reject_predictive_merge_requests keeps the queue place when no task failed" do
+      pmr = put_merge_request_in_branch
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      pmr.merge_request.update!(merge_requested_at: requested_at)
+      MergeRequest.any_instance.expects(:set_comment).with(regexp_matches(/keeps its place in the queue/))
+
+      @branch.reject_predictive_merge_requests(PredictiveBranch::STACK_TASKS_FAILED)
+      pmr.merge_request.reload.retry!
+      pmr.merge_request.restore_queue_place!
+
+      assert_equal requested_at, pmr.merge_request.reload.merge_requested_at
+    end
+
+    test "#reject_predictive_merge_requests does not keep the queue place after a failed task" do
+      pmr = put_merge_request_in_branch
+      requested_at = 3.hours.ago.utc.change(usec: 0)
+      pmr.merge_request.update!(merge_requested_at: requested_at)
+      CiJobsStatus.create!(predictive_branch_id: @branch.id, name: 'unit_test', status: :failed, link: '//ci/test/1/')
+      MergeRequest.any_instance.expects(:set_comment).with(Not(regexp_matches(/keeps its place/)))
+
+      @branch.reject_predictive_merge_requests(PredictiveBranch::STACK_TASKS_FAILED)
+      pmr.merge_request.reload.retry!
+      pmr.merge_request.restore_queue_place!
+
+      assert_operator pmr.merge_request.reload.merge_requested_at, :>, requested_at
+    end
+
     private
 
     def create_run_task(status:)
@@ -71,8 +150,7 @@ module Shipit
       )
     end
 
-    def put_merge_request_in_branch
-      merge_request = shipit_merge_requests(:shipit_pending)
+    def put_merge_request_in_branch(merge_request = shipit_merge_requests(:shipit_pending))
       MergeRequest.any_instance.stubs(:set_comment)
       PredictiveMergeRequest.create!(merge_request: merge_request, predictive_branch: @branch, head: merge_request.head)
     end
