@@ -42,6 +42,19 @@ module Shipit
       assert_predicate @build.reload, :tasks_running?
     end
 
+    test "a pipeline cleanup abort records the jobs and keeps the build status" do
+      @build.failed
+      cleanup = @build.schedule_cleanup_abort
+      cleanup.update!(status: 'success')
+      cleanup.write("job_name:common_automation link:https://ci/job/1/ status:ABORTED id:1\n")
+
+      @build.update_status(cleanup)
+
+      assert_predicate @build.reload, :failed?
+      assert_equal %w(aborted), @build.ci_jobs_statuses.map(&:status)
+      assert_equal 1, @build.predictive_build_tasks.where(predictive_task_type: 'abort').count
+    end
+
     test "a failed pipeline cleanup abort keeps the build status" do
       @build.cancel
       cleanup = @build.schedule_cleanup_abort

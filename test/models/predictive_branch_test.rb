@@ -73,14 +73,14 @@ module Shipit
     end
 
     test "a cleanup abort records the jobs and changes no status" do
-      @branch.tasks_canceled
+      @branch.failed
       cleanup = @branch.schedule_cleanup_abort
       cleanup.update!(status: 'success')
       cleanup.write("job_name:unit_test link:https://ci/job/1/ status:ABORTED id:1\n")
 
       @branch.update_status(cleanup)
 
-      assert_predicate @branch.reload, :tasks_canceled?
+      assert_predicate @branch.reload, :failed?
       assert_equal %w(aborted), @branch.ci_jobs_statuses.map(&:status)
       assert_equal 1, abort_tasks.count
     end
