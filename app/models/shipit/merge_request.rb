@@ -10,9 +10,11 @@ module Shipit
     QUEUED_STATUSES = %w(pending revalidating).freeze
     REJECTION_REASONS = %w(
       ci_missing ci_failing merge_conflict requires_rebase with_merge_request_issue not_mergeable train_culprit
+      ticket_failed ticket_missing
     ).freeze
     MERGEABILITY_TIMEOUT = 10.minutes
     MAX_TRAIN_CONFLICTS = 3
+    TICKET_TIMEOUT = 60.minutes
     InvalidTransition = Class.new(StandardError)
     NotReady = Class.new(StandardError)
 
@@ -133,6 +135,10 @@ module Shipit
 
       after_transition any => :canceled do |mr|
         mr.instance_variable_set(:@left_queue, true)
+      end
+
+      after_transition any => %i(canceled rejected) do |mr|
+        mr.end_ticket_wait
       end
     end
 
@@ -319,6 +325,44 @@ module Shipit
       Time.now.to_i - Shipit.redis.get(key).to_i < MERGEABILITY_TIMEOUT
     end
 
+    # [:passed | :failed | :waiting, the ticket checks that are not green on the head commit,
+    # the ticket checks without a result or a run on the head commit]
+    def ticket
+      @ticket ||= begin
+        checks = stack.cached_deploy_spec&.ticket_checks || []
+        latest = checks.any? && head ? latest_ticket_statuses : {}
+        failed = checks.select { |check| latest[check]&.failure? || latest[check]&.error? }
+        waiting = checks.reject { |check| latest[check]&.success? }
+        missing = checks.reject { |check| latest.key?(check) }
+        if failed.any?
+          [:failed, failed, missing]
+        elsif waiting.any?
+          [:waiting, waiting, missing]
+        else
+          [:passed, [], []]
+        end
+      end
+    end
+
+    def waiting_for_ticket?
+      ticket.first == :waiting
+    end
+
+    # True on the first call for a head commit, so the caller can comment one time.
+    def ticket_wait_started?
+      Shipit.redis.set(ticket_wait_key, Time.now.to_i, nx: true, ex: 1.day.to_i)
+    end
+
+    def ticket_timed_out?
+      since = Shipit.redis.get(ticket_wait_key)
+      since.present? && Time.now.to_i - since.to_i >= TICKET_TIMEOUT
+    end
+
+    # A later /shipit on the same commit starts a new wait.
+    def end_ticket_wait
+      Shipit.redis.del(ticket_wait_key)
+    end
+
     def schedule_refresh!
       RefreshMergeRequestJob.perform_later(self)
     end
@@ -336,6 +380,7 @@ module Shipit
       head.refresh_statuses!
       fetched! if fetching?
       @comparison = nil
+      @ticket = nil
     end
 
     def github_pull_request=(github_pull_request)
@@ -460,6 +505,28 @@ module Shipit
     end
 
     private
+
+    def ticket_wait_key
+      "MergeRequest::ticket_waiting_since_#{id}_#{head_id}"
+    end
+
+    # refresh! loads the commit statuses but not the check runs.
+    def latest_ticket_statuses
+      begin
+        head.refresh_check_runs!
+      rescue Octokit::Error, Faraday::Error => e
+        Rails.logger.warn("Merge request #{id}: could not refresh the check runs: #{e.message}")
+      end
+      check_runs = head.check_runs.reload.sort_by { |check_run| -check_run.github_id.to_i }
+      latest = (head.statuses.reload.to_a + check_runs).uniq(&:context).index_by(&:context)
+      latest.reject do |_, status|
+        # A canceled run is not a result of the commit: a newer build replaced it, or someone stopped it.
+        canceled = status.is_a?(CheckRun) && status.conclusion.in?(%w(cancelled stale))
+        # A build that Jenkins lost never reports its end, so its check stays in progress for ever.
+        lost = status.pending? && status.created_at < TICKET_TIMEOUT.ago
+        canceled || lost
+      end
+    end
 
     def queue_place_key
       "merge_request:#{id}:kept_queue_place"

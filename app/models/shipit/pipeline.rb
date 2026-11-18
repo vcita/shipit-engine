@@ -46,7 +46,9 @@ module Shipit
 
       candidates = []
       merge_requests.each do |merge_request|
-        next if merge_request.with_merge_requests.select(&:pending?).any?(&:waiting_for_mergeability?)
+        queued_with = merge_request.with_merge_requests.select(&:pending?)
+        next if queued_with.any?(&:waiting_for_mergeability?)
+        next if mode != MERGE_MODE_EMERGENCY && queued_with.any?(&:waiting_for_ticket?)
 
         invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
         if invalid_with.any?
@@ -179,7 +181,10 @@ module Shipit
       root = merge_request.with_parent_merge_request || merge_request
       wip = build_in_progress
       queued = queued_roots
-      return "Shipit starts the CI for this pull request within a minute." if !wip && queued.first == root
+      if !wip && queued.first == root
+        start = "Shipit starts the CI for this pull request within a minute."
+        return [start, ticket_message(merge_request)].compact.join(" ")
+      end
 
       ahead = queued.index(root) || queued.size
       msg = ["This pull request is number #{ahead + 1} in the merge queue."]
@@ -195,7 +200,16 @@ module Shipit
                "Expected merge: about #{(start + minutes.minutes).strftime('%H:%M')} UTC " \
                "(a CI takes about #{minutes} minutes)."
       end
-      msg.join(" ")
+      msg << ticket_message(merge_request)
+      msg.compact.join(" ")
+    end
+
+    # The reply to /shipit must not promise a CI that waits for the ticket.
+    def ticket_message(merge_request)
+      checks = merge_request.stack.cached_deploy_spec&.ticket_checks || []
+      return if checks.empty? || merge_request.mode == MERGE_MODE_EMERGENCY
+
+      "The CI starts only when these checks are green on the last commit: #{checks.map { |c| "`#{c}`" }.join(', ')}."
     end
 
     def remove_invalid_merge_requests(merge_requests, mode)
@@ -219,6 +233,7 @@ module Shipit
       merge_requests.select(&:pending?).each do |merge_request|
         merge_request.refresh!
         next if merge_request.waiting_for_mergeability?
+        next unless ticket?(merge_request, mode)
 
         if !merge_request.not_mergeable_yet? && merge_request.all_status_checks_passed?
           final_merge_requests << merge_request
@@ -244,6 +259,39 @@ module Shipit
       # A canceled or rejected merge request cannot be rejected or revalidated again.
       with_merge_requests = with_merge_requests.uniq.select(&:waiting?)
       remove_invalid_merge_requests(with_merge_requests, mode)
+    end
+
+    # A pull request without a ticket gets no CI and no automation env. An emergency merge skips the ticket.
+    def ticket?(merge_request, mode)
+      return true if mode == MERGE_MODE_EMERGENCY
+
+      state, checks, missing = merge_request.ticket
+      merge_request.end_ticket_wait unless state == :waiting
+      return true if state == :passed
+
+      # A pull request that was open before the stack got its ticket checks, or whose checks Jenkins lost.
+      if state == :waiting && missing.any? && merge_request.head
+        TicketRun.request(
+          merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch, checks: missing
+        )
+      end
+
+      names = checks.map { |check| "`#{check}`" }.join(', ')
+      if state == :failed
+        merge_request.reject!('ticket_failed')
+        merge_request.set_comment("These ticket checks failed on the last commit: #{names}. Shipit removed " \
+                                  "this pull request from the merge queue. Fix the checks and comment `/shipit` again.")
+      elsif merge_request.ticket_wait_started?
+        merge_request.set_comment("This pull request waits for its ticket. These checks are not green on the " \
+                                  "last commit: #{names}. Shipit starts the CI of the pull request when they pass.")
+      elsif merge_request.ticket_timed_out?
+        merge_request.end_ticket_wait
+        merge_request.reject!('ticket_missing')
+        merge_request.set_comment("These ticket checks gave no result in " \
+                                  "#{MergeRequest::TICKET_TIMEOUT.inspect}: #{names}. Shipit removed this pull " \
+                                  "request from the merge queue. Comment `/shipit` again when the checks are green.")
+      end
+      false
     end
 
     def train_caps(stack)
