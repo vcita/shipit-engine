@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 2021_04_13_094049) do
+ActiveRecord::Schema.define(version: 2026_11_17_090000) do
 
   create_table "api_clients", force: :cascade do |t|
     t.text "permissions", limit: 65535
@@ -234,6 +234,9 @@ ActiveRecord::Schema.define(version: 2021_04_13_094049) do
     t.string "mode", limit: 30, default: "default", null: false
     t.string "ci_stack_status", limit: 50, default: "ci_stack_pending"
     t.string "ci_pipeline_status", limit: 50, default: "ci_pipeline_pending"
+    t.text "culprit_finder_answer"
+    t.string "train_decision", limit: 30
+    t.integer "culprit_merge_request_id"
     t.index ["pipeline_id"], name: "index_predictive_builds_on_pipeline_id"
   end
 

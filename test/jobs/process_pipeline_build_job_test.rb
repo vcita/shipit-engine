@@ -328,5 +328,87 @@ module Shipit
       assert_equal 1, branches.size
       assert_equal [@second], branches.first.predictive_merge_requests.map(&:merge_request)
     end
+
+    test "#create_predictive_branches keeps a pull request of a train in the queue when it conflicts with the train" do
+      build = PredictiveBuild.create!(pipeline: @pipeline, branch: 'PREDICTIVE-BRANCH-2')
+      ok = stub(run!: true)
+      commands = stub(git_clone: ok, git_fetch: ok, git_checkout: ok, git_reset: ok, git_clean: ok, git_push: ok)
+      commands.stubs(:git_merge_origin_as_pr).with(@first.branch, @first.number).returns(ok)
+      commands.stubs(:git_merge_origin_as_pr).with(@second.branch, @second.number)
+        .returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('merge conflict', 1)) })
+      Commands.stubs(:for).returns(commands)
+      @second.expects(:set_comment).with(regexp_matches(/stays in the merge queue/)).once
+
+      merged = @job.create_predictive_branches(build, [@first, @second], nil, requeue_conflicts: true)
+
+      assert_equal [@first], merged
+      assert_predicate @second.reload, :pending?
+      assert_equal [@first], build.predictive_branches.first.predictive_merge_requests.map(&:merge_request)
+    end
+
+    test "#create_predictive_branches rejects a pull request of a train that never merges with the train" do
+      build = PredictiveBuild.create!(pipeline: @pipeline, branch: 'PREDICTIVE-BRANCH-2')
+      ok = stub(run!: true)
+      commands = stub(git_clone: ok, git_fetch: ok, git_checkout: ok, git_reset: ok, git_clean: ok, git_push: ok)
+      commands.stubs(:git_merge_origin_as_pr).with(@first.branch, @first.number).returns(ok)
+      commands.stubs(:git_merge_origin_as_pr).with(@second.branch, @second.number)
+        .returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('merge conflict', 1)) })
+      Commands.stubs(:for).returns(commands)
+
+      (MergeRequest::MAX_TRAIN_CONFLICTS + 1).times do
+        @job.create_predictive_branches(build, [@first, @second], nil, requeue_conflicts: true)
+      end
+
+      assert_predicate @second.reload, :rejected?
+    end
+
+    test "#generate_predictive_build records the mode of a build that has a branch" do
+      @build.cancel
+      @pipeline.stubs(:build_modes).returns([Pipeline::MERGE_MODE_SINGLE])
+      @pipeline.stubs(:release_candidates).with(Pipeline::MERGE_MODE_SINGLE).returns([@first])
+      @job.stubs(:create_predictive_branches).with do |build, *|
+        PredictiveBranch.create!(predictive_build: build, branch: build.branch, stack: @stack, stack_commit: shipit_commits(:fifth))
+      end.returns([@first])
+
+      build = @job.generate_predictive_build(@pipeline)
+
+      assert_equal Pipeline::MERGE_MODE_SINGLE, build.reload.mode
+      assert_predicate build, :branched?
+    end
+
+    test "#generate_predictive_build passes the train caps to a train" do
+      Stack.any_instance.stubs(:train?).returns(true)
+      @build.cancel
+      @pipeline.stubs(:release_candidates).returns([])
+      @pipeline.stubs(:release_candidates).with(Pipeline::MERGE_MODE_TRAIN).returns([@first, @second])
+      @pipeline.expects(:train_passengers).with([@first, @second]).returns([@first])
+      @job.expects(:create_predictive_branches).with(anything, [@first], nil, requeue_conflicts: true).returns([])
+
+      build = @job.generate_predictive_build(@pipeline)
+
+      assert_predicate build, :completed?
+    end
+
+    test "#generate_predictive_build keeps the default mode of a stack without a train config as it was" do
+      @build.cancel
+      @pipeline.stubs(:release_candidates).returns([])
+      @pipeline.stubs(:release_candidates).with(Pipeline::MERGE_MODE_TRAIN).returns([@first, @second])
+      @pipeline.expects(:train_passengers).never
+      @job.expects(:create_predictive_branches).with(anything, [@first, @second], nil, requeue_conflicts: false).returns([])
+
+      @job.generate_predictive_build(@pipeline)
+    end
+
+    test "#generate_predictive_build leaves no pending build behind when a mode merges nothing" do
+      @build.cancel
+      @pipeline.stubs(:build_modes).returns(%w(promote single))
+      @pipeline.stubs(:release_candidates).with('promote').returns([@first])
+      @pipeline.stubs(:release_candidates).with('single').returns([@second])
+      @job.stubs(:create_predictive_branches).returns([])
+
+      @job.generate_predictive_build(@pipeline)
+
+      assert_empty PredictiveBuild.where(pipeline: @pipeline, status: PredictiveBuild::WIP_STATUSES)
+    end
   end
 end

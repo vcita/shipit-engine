@@ -31,11 +31,10 @@ module Shipit
       add_comment(msg)
     end
 
-    def reject(msg)
+    def reject(msg, reason: nil)
       rejected
-      merge_request.reject
-      merge_request.with_merge_requests.each do |mr|
-        mr.reject
+      ([merge_request] + merge_request.with_merge_requests).each do |mr|
+        reason && mr.pending? ? mr.reject!(reason) : mr.reject
       end
       add_comment(msg)
     end

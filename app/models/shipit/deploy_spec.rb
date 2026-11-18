@@ -4,6 +4,8 @@ require 'pathname'
 module Shipit
   class DeploySpec
     Error = Class.new(StandardError)
+    TRAIN_DEFAULT_MAX_PRS = 2
+    TRAIN_DEFAULT_CULPRIT_CONFIDENCE = 0.7
 
     class << self
       attr_accessor :pretty_generate
@@ -248,6 +250,23 @@ module Shipit
         rescue Duration::ParseError
         end
       end
+    end
+
+    def train?
+      config('merge', 'train').is_a?(Hash)
+    end
+
+    # 0 means no limit.
+    def train_max_prs
+      (config('merge', 'train', 'max_prs') || TRAIN_DEFAULT_MAX_PRS).to_i
+    end
+
+    def train_max_commits
+      config('merge', 'train', 'max_commits').to_i
+    end
+
+    def train_culprit_confidence
+      (config('merge', 'train', 'culprit_confidence') || TRAIN_DEFAULT_CULPRIT_CONFIDENCE).to_f
     end
 
     def review_checks

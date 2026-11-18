@@ -379,6 +379,10 @@ module Shipit
       !locked? && !active_task? && !awaiting_provision?
     end
 
+    def train?
+      cached_deploy_spec&.train? || false
+    end
+
     def allows_merges?(mode = nil)
       merge_queue_enabled? && (!locked? || mode==Shipit::Pipeline::MERGE_MODE_EMERGENCY) && merge_status == 'success'
     end

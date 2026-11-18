@@ -12,12 +12,26 @@ module Shipit
     MERGE_MODE_DRY_RUN = 'dryrun'
     MERGE_MODE_DEFAULT = 'single'
     MERGE_MODE_SINGLE = 'single'
+    MERGE_MODE_TRAIN = 'default'
+    MERGE_MODE_PROMOTE = 'promote'
     MERGE_MODE_EMERGENCY = 'emergency'
 
-    MERGE_MODES = %w(emergency single default).freeze
-    MERGE_SINGLE_MODES = %w(emergency single).freeze
+    MERGE_MODES = %w(emergency promote single default).freeze
+    MERGE_SINGLE_MODES = %w(emergency promote single).freeze
     MERGE_SINGLE_EMERGENCY = %w(emergency).freeze
+    QUEUE_ORDER_MODES = %w(single default).freeze
 
+    # The mode of a /shipit without a mode.
+    def self.default_mode(stack)
+      stack&.train? ? MERGE_MODE_TRAIN : MERGE_MODE_DEFAULT
+    end
+
+    # Emergency and promote go first. Single and train requests share one queue, so the
+    # oldest request decides which of the two modes builds next.
+    def build_modes
+      queued = MergeRequest.where(stack: stacks).to_be_merged.where(mode: QUEUE_ORDER_MODES).pluck(:mode).uniq
+      [MERGE_MODE_EMERGENCY, MERGE_MODE_PROMOTE] + queued + (QUEUE_ORDER_MODES - queued)
+    end
 
     # merge_requests
     def release_candidates(mode)
@@ -43,6 +57,23 @@ module Shipit
       end
 
       candidates
+    end
+
+    # Takes the candidates in queue order while each stack stays under its caps. The first
+    # candidate always boards, so a pull request over the commit cap can still merge.
+    def train_passengers(candidates)
+      prs = Hash.new(0)
+      commits = Hash.new(0)
+      candidates.select do |candidate|
+        group = ([candidate] + candidate.with_merge_requests).group_by(&:stack)
+        next false unless prs.empty? || group.all? { |stack, mrs| train_has_room?(stack, mrs, prs, commits) }
+
+        group.each do |stack, mrs|
+          prs[stack.id] += mrs.size
+          commits[stack.id] += mrs.sum(&:commits_count) if train_caps(stack).last.positive?
+        end
+        true
+      end
     end
 
     # A linked pull request can be canceled, rejected or revalidating while the root stays pending.
@@ -213,6 +244,18 @@ module Shipit
       # A canceled or rejected merge request cannot be rejected or revalidated again.
       with_merge_requests = with_merge_requests.uniq.select(&:waiting?)
       remove_invalid_merge_requests(with_merge_requests, mode)
+    end
+
+    def train_caps(stack)
+      spec = stack.cached_deploy_spec
+      spec&.train? ? [spec.train_max_prs, spec.train_max_commits] : [0, 0]
+    end
+
+    def train_has_room?(stack, merge_requests, prs, commits)
+      max_prs, max_commits = train_caps(stack)
+      return false if max_prs.positive? && prs[stack.id] + merge_requests.size > max_prs
+
+      max_commits.zero? || commits[stack.id] + merge_requests.sum(&:commits_count) <= max_commits
     end
 
     def self.schedule_predictive_build

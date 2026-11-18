@@ -9,6 +9,7 @@ module Shipit
     has_many :predictive_build_tasks
     has_many :predictive_branches
     has_many :ci_jobs_statuses
+    belongs_to :culprit_merge_request, class_name: 'Shipit::MergeRequest', optional: true
 
     WAITING_STATUSES = %w(pending).freeze
     WIP_STATUSES = %w(pending branched tasks_running tasks_completed waiting_for_merging).freeze
@@ -184,6 +185,17 @@ module Shipit
       end
     end
 
+    def train?
+      mode == Pipeline::MERGE_MODE_TRAIN && predictive_branches.any? { |p_branch| p_branch.stack.train? }
+    end
+
+    # With one pull request there is no culprit to find, so the build fails as in single mode.
+    def red_train?
+      return false unless train?
+
+      waiting_predictive_merge_requests.map(&:merge_request).count(&:root?) > 1
+    end
+
     def in_emergency_mode?
       mode == Pipeline::MERGE_MODE_EMERGENCY
     end
@@ -217,11 +229,11 @@ module Shipit
         # next cron tick re-polls anyway. A :failed poll is the script exiting
         # non-zero on a real CI failure and must fail the run immediately.
         if predictive_task_type == :verify && [:error, :timedout].include?(pipeline_task_status)
-          return pipeline_task_failed if verify_poll_strike! > MAX_VERIFY_POLL_STRIKES
+          return pipeline_task_failed(task) if verify_poll_strike! > MAX_VERIFY_POLL_STRIKES
           Rails.logger.warn("Predictive build #{id}: verify task #{task.id} ended #{pipeline_task_status}, keeping CI status and waiting for next poll")
           return
         end
-        return pipeline_task_failed
+        return pipeline_task_failed(task)
       end
       # Only a completed successful poll proves the CI is healthy; a freshly
       # created (:pending) task must not reset the consecutive-failure count.
@@ -233,7 +245,7 @@ module Shipit
       elsif predictive_task_type == :verify
         ci_pipeline_verifying     if pipeline_task_status == :running || pipeline_task_status == :pending || status == :running
         ci_pipeline_completed     if pipeline_task_status == :success && status == :success
-        pipeline_task_failed      if pipeline_task_status == :success && status == :aborted
+        pipeline_task_failed(task) if pipeline_task_status == :success && status == :aborted
       elsif predictive_task_type == :abort
         ci_pipeline_canceling     if pipeline_task_status == :running || pipeline_task_status == :pending
         cancel                    if pipeline_task_status == :success
@@ -291,8 +303,9 @@ module Shipit
       end
     end
 
-    def pipeline_task_failed
+    def pipeline_task_failed(task = nil)
       ci_pipeline_failed
+      RedTrain.new(self).resolve(task) if red_train?
       build_failed
     end
 
