@@ -7,17 +7,17 @@ module Shipit
 
     setup do
       @stack = shipit_stacks(:shipit)
-      configure('ticket_checks' => %w(unit_test-ticket), 'run' => ['echo start $BRANCH'])
+      configure('unit_test-ticket' => 'echo start $BRANCH')
     end
 
-    test ".request starts the steps one time for a commit" do
-      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62').once
+    test ".request starts the commands one time for a commit" do
+      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', nil).once
 
       assert TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
       refute TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
     end
 
-    test ".request starts the steps again after the retry time" do
+    test ".request starts the commands again after the retry time" do
       StartTicketJob.expects(:perform_later).twice
       TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
 
@@ -27,17 +27,20 @@ module Shipit
       end
     end
 
-    test ".request does nothing for a stack without ticket checks or without steps" do
+    test ".request passes the checks to start" do
+      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', %w(unit_test-ticket)).once
+
+      TicketRun.request(@stack, sha: SHA, branch: 'feature-62', checks: %w(unit_test-ticket))
+    end
+
+    test ".request does nothing for a stack without a ticket" do
       StartTicketJob.expects(:perform_later).never
+      configure({})
 
-      configure('ticket_checks' => [], 'run' => ['echo start'])
-      refute TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
-
-      configure('ticket_checks' => %w(unit_test-ticket), 'run' => [])
       refute TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
     end
 
-    test "#env gives the steps the commit as the branch to test" do
+    test "#env gives the commands the commit as the branch to test" do
       env = TicketRun.new(@stack, SHA, 'feature-62').env
 
       assert_equal SHA, env['BRANCH']
@@ -47,19 +50,26 @@ module Shipit
       assert_equal({ @stack.github_repo_name => ['feature-62'] }, JSON.parse(Base64.decode64(env['PRS_BRANCHES'])))
     end
 
-    test "#run runs each step with the env" do
-      configure('ticket_checks' => %w(unit_test-ticket), 'run' => ['step one', 'step two'])
+    test "#run runs the command of each check with the env" do
+      configure('lint-ticket' => 'start lint', 'unit-ticket' => 'start unit')
       ok = stub(run!: 'started')
-      Command.expects(:new).with('step one', has_entry(:env, has_entry('BRANCH', SHA))).returns(ok)
-      Command.expects(:new).with('step two', anything).returns(ok)
+      Command.expects(:new).with('start lint', has_entry(:env, has_entry('BRANCH', SHA))).returns(ok)
+      Command.expects(:new).with('start unit', anything).returns(ok)
 
       TicketRun.new(@stack, SHA, 'feature-62').run
     end
 
-    test "#run executes a real step with the commit in its environment" do
+    test "#run runs only the commands of the given checks" do
+      configure('lint-ticket' => 'start lint', 'unit-ticket' => 'start unit')
+      Command.expects(:new).with('start unit', anything).once.returns(stub(run!: 'started'))
+
+      TicketRun.new(@stack, SHA, 'feature-62', %w(unit-ticket no-such-check)).run
+    end
+
+    test "#run executes a real command with the commit in its environment" do
       marker = File.join(Dir.tmpdir, "ticket-#{SHA}")
       FileUtils.rm_f(marker)
-      configure('ticket_checks' => %w(unit_test-ticket), 'run' => ["touch #{Dir.tmpdir}/ticket-$BRANCH"])
+      configure('unit_test-ticket' => "touch #{Dir.tmpdir}/ticket-$BRANCH")
 
       TicketRun.new(@stack, SHA, 'feature-62').run
 
@@ -68,7 +78,7 @@ module Shipit
       FileUtils.rm_f(marker)
     end
 
-    test "#run lets the next request start the steps again when a step fails" do
+    test "#run lets the next request start the commands again when a command fails" do
       StartTicketJob.stubs(:perform_later)
       TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
       failing = stub.tap { |command| command.stubs(:run!).raises(Command::Failed.new('no Jenkins', 1)) }
@@ -82,10 +92,7 @@ module Shipit
     private
 
     def configure(ticket)
-      @stack.update!(cached_deploy_spec: DeploySpec.new(
-        'merge' => { 'ticket_checks' => ticket['ticket_checks'] },
-        'ci' => { 'ticket' => { 'run' => ticket['run'] } },
-      ))
+      @stack.update!(cached_deploy_spec: DeploySpec.new('ci' => { 'ticket' => ticket }))
     end
   end
 end

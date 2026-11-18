@@ -271,7 +271,9 @@ module Shipit
 
       # A pull request that was open before the stack got its ticket checks, or whose checks Jenkins lost.
       if state == :waiting && missing.any? && merge_request.head
-        TicketRun.request(merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch)
+        TicketRun.request(
+          merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch, checks: missing
+        )
       end
 
       names = checks.map { |check| "`#{check}`" }.join(', ')

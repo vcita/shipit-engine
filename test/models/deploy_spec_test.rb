@@ -1178,27 +1178,28 @@ module Shipit
       assert_in_delta 0.85, cached.train_culprit_confidence
     end
 
-    test "ticket_checks is empty without `merge.ticket_checks`" do
+    test "ticket is empty without `ci.ticket`" do
       @spec.expects(:load_config).returns('merge' => { 'train' => {} })
+      assert_equal({}, @spec.ticket)
       assert_equal [], @spec.ticket_checks
     end
 
-    test "ticket_checks returns `merge.ticket_checks`, and does not turn on the train" do
-      @spec.expects(:load_config).returns('merge' => { 'ticket_checks' => %w(lint unit) })
-      assert_equal %w(lint unit), @spec.ticket_checks
+    test "ticket maps each check of `ci.ticket` to its command, and does not turn on the train" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => { 'lint-ticket' => 'start lint', 'unit-ticket' => 'start unit' } })
+      assert_equal %w(lint-ticket unit-ticket), @spec.ticket_checks
+      assert_equal 'start unit', @spec.ticket['unit-ticket']
       refute_predicate @spec, :train?
-      assert_equal %w(lint unit), DeploySpec.load(DeploySpec.dump(@spec)).ticket_checks
+      assert_equal @spec.ticket, DeploySpec.load(DeploySpec.dump(@spec)).ticket
     end
 
-    test "ci_ticket_steps returns `ci.ticket.run` and survives the cache" do
-      @spec.expects(:load_config).returns('ci' => { 'ticket' => { 'run' => ['start unit_test'] } })
-      assert_equal ['start unit_test'], @spec.ci_ticket_steps
-      assert_equal ['start unit_test'], DeploySpec.load(DeploySpec.dump(@spec)).ci_ticket_steps
+    test "ticket leaves out a check without a command" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => { 'lint-ticket' => 'start lint', 'unit-ticket' => nil } })
+      assert_equal %w(lint-ticket), @spec.ticket_checks
     end
 
-    test "ci_ticket_steps is empty without `ci.ticket`" do
-      @spec.expects(:load_config).returns({})
-      assert_equal [], @spec.ci_ticket_steps
+    test "ticket ignores the old list form" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => %w(lint unit) })
+      assert_equal({}, @spec.ticket)
     end
   end
 end

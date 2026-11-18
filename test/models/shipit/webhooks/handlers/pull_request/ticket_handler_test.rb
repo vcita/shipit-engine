@@ -12,13 +12,12 @@ module Shipit
           setup do
             @stack = shipit_stacks(:shipit)
             @stack.update!(merge_queue_enabled: true, cached_deploy_spec: DeploySpec.new(
-              'merge' => { 'ticket_checks' => %w(unit_test-ticket) },
-              'ci' => { 'ticket' => { 'run' => ['echo start'] } },
+              'ci' => { 'ticket' => { 'unit_test-ticket' => 'echo start' } },
             ))
           end
 
           test "a push starts the ticket checks of the new commit" do
-            StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62').once
+            StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', nil).once
 
             process('synchronize')
           end

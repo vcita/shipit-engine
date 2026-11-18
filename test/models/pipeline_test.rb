@@ -227,7 +227,7 @@ module Shipit
       ticket_config(%w(lint unit))
       ticket_status(@pending, 'lint', 'pending')
       Shipit.github.api.stubs(:add_comment)
-      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(unit)).once
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
     end
@@ -286,7 +286,7 @@ module Shipit
       ticket_config(%w(lint))
       @pending.head.check_runs.create!(stack: @stack, name: 'lint', conclusion: 'cancelled', github_id: 78, title: 'stopped')
       Shipit.github.api.stubs(:add_comment)
-      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(lint)).once
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
       assert_predicate @pending.reload, :pending?
@@ -299,7 +299,7 @@ module Shipit
         created_at: (MergeRequest::TICKET_TIMEOUT + 1.minute).ago,
       )
       Shipit.github.api.stubs(:add_comment)
-      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch).once
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(lint)).once
 
       assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
       assert_predicate @pending.reload, :pending?
@@ -422,7 +422,8 @@ module Shipit
     private
 
     def ticket_config(checks)
-      @stack.update!(cached_deploy_spec: DeploySpec.new('merge' => { 'ticket_checks' => checks }))
+      ticket = checks.map { |check| [check, "start #{check}"] }.to_h
+      @stack.update!(cached_deploy_spec: DeploySpec.new('ci' => { 'ticket' => ticket }))
       [@pending, @unknown].each { |merge_request| merge_request.stack.reload }
     end
 

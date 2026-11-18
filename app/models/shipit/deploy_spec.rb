@@ -193,8 +193,17 @@ module Shipit
       ci_pipeline[step] || {}
     end
 
-    def ci_ticket_steps
-      Array.wrap(config('ci', 'ticket', 'run'))
+    # `ci.ticket` maps the name of each GitHub check that a pull request needs to the command that
+    # starts it. One map, so a check cannot be asked for without a command that starts it.
+    def ticket
+      checks = config('ci', 'ticket')
+      return {} unless checks.is_a?(Hash)
+
+      checks.select { |_, command| command.is_a?(String) && command.present? }.transform_keys(&:to_s)
+    end
+
+    def ticket_checks
+      ticket.keys
     end
 
     def hidden_statuses
@@ -267,11 +276,6 @@ module Shipit
 
     def train_max_commits
       config('merge', 'train', 'max_commits').to_i
-    end
-
-    # Not under `merge.train`: a stack can ask for a ticket before it runs trains.
-    def ticket_checks
-      Array.wrap(config('merge', 'ticket_checks'))
     end
 
     def train_culprit_confidence
