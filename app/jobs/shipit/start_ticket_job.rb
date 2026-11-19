@@ -1,22 +1,24 @@
 # frozen_string_literal: true
 module Shipit
   class StartTicketJob < BackgroundJob
-    MERGEABLE_ATTEMPTS = 4
-    MERGEABLE_WAIT = 15.seconds
+    STATE_ATTEMPTS = 4
+    STATE_WAIT = 15.seconds
+    NO_START = { conflict: 'merge conflict', not_head: 'not the head commit any more' }.freeze
 
     queue_as :default
 
-    # A pull request with a merge conflict cannot merge, so its checks would be wasted.
-    # Without an answer from GitHub after the last attempt, the checks start.
+    # A pull request with a merge conflict cannot merge, and a commit that a later push replaced
+    # cannot get the ticket, so their checks would be wasted. GitHub can be late with both answers,
+    # so the job asks again. Without a mergeable state after the last attempt, the checks start.
     def perform(stack, sha, branch, checks = nil, number = nil, attempt = 1)
       run = TicketRun.new(stack, sha, branch, checks)
-      mergeable = number ? run.mergeable?(number) : true
-      if mergeable.nil? && attempt < MERGEABLE_ATTEMPTS
-        return self.class.set(wait: MERGEABLE_WAIT).perform_later(stack, sha, branch, checks, number, attempt + 1)
+      state = number ? run.state(number) : :mergeable
+      if state.in?(%i(unknown not_head)) && attempt < STATE_ATTEMPTS
+        return self.class.set(wait: STATE_WAIT).perform_later(stack, sha, branch, checks, number, attempt + 1)
       end
-      if mergeable == false
+      if NO_START.key?(state)
         pull_request = "#{stack.github_repo_name}##{number}@#{sha}"
-        Rails.logger.info("Train ticket of #{pull_request}: merge conflict, no checks started")
+        Rails.logger.info("Train ticket of #{pull_request}: #{NO_START[state]}, no checks started")
         return run.skip
       end
 

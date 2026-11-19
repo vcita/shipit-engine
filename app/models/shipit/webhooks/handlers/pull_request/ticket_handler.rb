@@ -12,6 +12,7 @@ module Shipit
           params do
             requires :action, String
             requires :number, Integer
+            accepts :before, String
             requires :pull_request do
               accepts :draft, Axiom::Types::Boolean
               requires :head do
@@ -29,9 +30,14 @@ module Shipit
 
           def process
             return unless params.action.in?(ACTIONS)
-            return if params.pull_request.draft
 
             stacks.where(branch: params.pull_request.base.ref, merge_queue_enabled: true).each do |stack|
+              # `before` is the head that this push replaced.
+              if params.action == 'synchronize' && params.before.present?
+                TicketRun.abort(stack, sha: params.before, branch: params.pull_request.head.ref)
+              end
+              next if params.pull_request.draft
+
               TicketRun.request(
                 stack, sha: params.pull_request.head.sha, branch: params.pull_request.head.ref, number: params.number
               )

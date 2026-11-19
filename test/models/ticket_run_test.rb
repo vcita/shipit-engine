@@ -78,16 +78,64 @@ module Shipit
       FileUtils.rm_f(marker)
     end
 
-    test "#mergeable? reads the state of the pull request from GitHub" do
-      Shipit.github.api.expects(:pull_request).with(@stack.github_repo_name, 62).returns(stub(mergeable: false))
+    test "#state reads the head and the mergeable state of the pull request from GitHub" do
+      { true => :mergeable, false => :conflict, nil => :unknown }.each do |mergeable, state|
+        Shipit.github.api.expects(:pull_request).with(@stack.github_repo_name, 62)
+          .returns(stub(mergeable: mergeable, head: stub(sha: SHA)))
 
-      assert_equal false, TicketRun.new(@stack, SHA, 'feature-62').mergeable?(62)
+        assert_equal state, TicketRun.new(@stack, SHA, 'feature-62').state(62)
+      end
     end
 
-    test "#mergeable? is nil when GitHub gives an error" do
+    test "#state is :not_head for a commit that a later push replaced" do
+      Shipit.github.api.expects(:pull_request).returns(stub(mergeable: true, head: stub(sha: 'b' * 40)))
+
+      assert_equal :not_head, TicketRun.new(@stack, SHA, 'feature-62').state(62)
+    end
+
+    test "#state is :unknown when GitHub gives an error" do
       Shipit.github.api.expects(:pull_request).raises(Octokit::NotFound)
 
-      assert_nil TicketRun.new(@stack, SHA, 'feature-62').mergeable?(62)
+      assert_equal :unknown, TicketRun.new(@stack, SHA, 'feature-62').state(62)
+    end
+
+    test ".abort starts the abort job only for a stack with abort commands" do
+      AbortTicketJob.expects(:perform_later).never
+      refute TicketRun.abort(@stack, sha: SHA, branch: 'feature-62')
+
+      configure('lint-ticket' => { 'run' => 'start lint', 'abort' => 'stop lint' })
+      AbortTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62').once
+      assert TicketRun.abort(@stack, sha: SHA, branch: 'feature-62')
+    end
+
+    test "#abort runs each abort command with the commit, also after one fails" do
+      configure(
+        'lint-ticket' => { 'run' => 'start lint', 'abort' => 'stop lint' },
+        'unit-ticket' => { 'run' => 'start unit', 'abort' => 'stop unit' },
+        'e2e-ticket' => 'start e2e',
+      )
+      failing = stub.tap { |command| command.stubs(:run!).raises(Command::Failed.new('no Jenkins', 1)) }
+      Command.expects(:new).with('stop lint', has_entry(:env, has_entry('BRANCH', SHA))).returns(failing)
+      Command.expects(:new).with('stop unit', has_entry(:env, has_entry('BRANCH', SHA))).returns(stub(run!: 'stopped'))
+
+      TicketRun.new(@stack, SHA, 'feature-62').abort
+    end
+
+    test "#abort lets a later request start the commands of the commit again" do
+      configure('lint-ticket' => { 'run' => 'start lint', 'abort' => 'true' })
+      StartTicketJob.stubs(:perform_later)
+      TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
+
+      TicketRun.new(@stack, SHA, 'feature-62').abort
+
+      assert TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
+    end
+
+    test "#run starts the `run` command of a check in the map form" do
+      configure('lint-ticket' => { 'run' => 'start lint', 'abort' => 'stop lint' })
+      Command.expects(:new).with('start lint', anything).once.returns(stub(run!: 'started'))
+
+      TicketRun.new(@stack, SHA, 'feature-62').run
     end
 
     test "#skip lets the next request start the commands" do

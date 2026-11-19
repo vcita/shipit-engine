@@ -1197,6 +1197,20 @@ module Shipit
       assert_equal %w(lint-ticket), @spec.ticket_checks
     end
 
+    test "ticket takes `run` and `abort` of a check in the map form" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => {
+        'lint-ticket' => { 'run' => 'start lint', 'abort' => 'stop lint' },
+        'unit-ticket' => 'start unit',
+        'e2e-ticket' => { 'abort' => 'stop e2e' },
+      } })
+      assert_equal({ 'lint-ticket' => 'start lint', 'unit-ticket' => 'start unit' }, @spec.ticket)
+      assert_equal({ 'lint-ticket' => 'stop lint' }, @spec.ticket_abort)
+
+      cached = DeploySpec.load(DeploySpec.dump(@spec))
+      assert_equal @spec.ticket, cached.ticket
+      assert_equal @spec.ticket_abort, cached.ticket_abort
+    end
+
     test "ticket ignores the old list form" do
       @spec.expects(:load_config).returns('ci' => { 'ticket' => %w(lint unit) })
       assert_equal({}, @spec.ticket)
