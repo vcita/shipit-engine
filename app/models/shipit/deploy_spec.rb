@@ -195,11 +195,26 @@ module Shipit
 
     # `ci.ticket` maps the name of each GitHub check that a pull request needs to the command that
     # starts it. One map, so a check cannot be asked for without a command that starts it.
+    # A check can also be a map: `run` starts it, and the optional `abort` stops its build.
     def ticket
+      ticket_commands('run')
+    end
+
+    def ticket_abort
+      ticket_commands('abort')
+    end
+
+    def ticket_commands(kind)
       checks = config('ci', 'ticket')
       return {} unless checks.is_a?(Hash)
 
-      checks.select { |_, command| command.is_a?(String) && command.present? }.transform_keys(&:to_s)
+      checks = checks.select { |_, entry| ticket_command(entry, 'run') }
+      checks.transform_values { |entry| ticket_command(entry, kind) }.compact.transform_keys(&:to_s)
+    end
+
+    def ticket_command(entry, kind)
+      command = entry.is_a?(Hash) ? entry[kind] || entry[kind.to_sym] : (entry if kind == 'run')
+      command if command.is_a?(String) && command.present?
     end
 
     def ticket_checks

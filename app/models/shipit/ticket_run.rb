@@ -25,6 +25,14 @@ module Shipit
       true
     end
 
+    # Stops the builds of a commit that is not the head of its pull request any more.
+    def self.abort(stack, sha:, branch:)
+      return false unless configured?(stack) && stack.cached_deploy_spec.ticket_abort.any?
+
+      AbortTicketJob.perform_later(stack, sha, branch)
+      true
+    end
+
     def self.key(stack, sha)
       "TicketRun::#{stack.id}_#{sha}"
     end
@@ -50,12 +58,29 @@ module Shipit
       Shipit.redis.del(self.class.key(@stack, @sha))
     end
 
-    # nil while GitHub computes it, which takes some seconds after a push.
-    def mergeable?(number)
-      Shipit.github.api.pull_request(@stack.github_repo_name, number).mergeable
+    # The commands find the builds by the commit, as `run` started them with it.
+    def abort
+      Shipit.redis.del(self.class.key(@stack, @sha))
+      Dir.mktmpdir do |dir|
+        @stack.cached_deploy_spec.ticket_abort.each_value do |command|
+          Command.new(command, env: env, chdir: dir).run!
+        rescue Command::Error => e
+          Rails.logger.error("Train ticket checks of #{@stack.github_repo_name}@#{@sha} did not stop: #{e.message}")
+        end
+      end
+    end
+
+    # :mergeable, :conflict, :not_head (a later push replaced the commit), or :unknown while GitHub
+    # computes `mergeable`, which takes some seconds after a push.
+    def state(number)
+      pull_request = Shipit.github.api.pull_request(@stack.github_repo_name, number)
+      return :not_head unless pull_request.head.sha == @sha
+      return :unknown if pull_request.mergeable.nil?
+
+      pull_request.mergeable ? :mergeable : :conflict
     rescue Octokit::Error => e
-      Rails.logger.warn("Train ticket of #{@stack.github_repo_name}##{number}: no mergeable state: #{e.message}")
-      nil
+      Rails.logger.warn("Train ticket of #{@stack.github_repo_name}##{number}: no pull request state: #{e.message}")
+      :unknown
     end
 
     # A later request for this commit can start the checks, for a conflict that a change of the
