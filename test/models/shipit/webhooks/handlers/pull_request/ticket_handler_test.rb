@@ -17,7 +17,7 @@ module Shipit
           end
 
           test "a push starts the ticket checks of the new commit" do
-            StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', nil).once
+            StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', nil, 2).once
 
             process('synchronize')
           end

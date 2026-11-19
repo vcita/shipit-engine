@@ -32,7 +32,9 @@ module Shipit
             return if params.pull_request.draft
 
             stacks.where(branch: params.pull_request.base.ref, merge_queue_enabled: true).each do |stack|
-              TicketRun.request(stack, sha: params.pull_request.head.sha, branch: params.pull_request.head.ref)
+              TicketRun.request(
+                stack, sha: params.pull_request.head.sha, branch: params.pull_request.head.ref, number: params.number
+              )
             end
           end
         end
