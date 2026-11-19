@@ -14,7 +14,11 @@ module Shipit
       if mergeable.nil? && attempt < MERGEABLE_ATTEMPTS
         return self.class.set(wait: MERGEABLE_WAIT).perform_later(stack, sha, branch, checks, number, attempt + 1)
       end
-      return run.skip if mergeable == false
+      if mergeable == false
+        pull_request = "#{stack.github_repo_name}##{number}@#{sha}"
+        Rails.logger.info("Train ticket of #{pull_request}: merge conflict, no checks started")
+        return run.skip
+      end
 
       run.run
     end

@@ -21,6 +21,7 @@ module Shipit
       TicketRun.any_instance.stubs(:mergeable?).with(62).returns(false)
       TicketRun.any_instance.expects(:run).never
       TicketRun.any_instance.expects(:skip).once
+      Rails.logger.expects(:info).with(regexp_matches(/#62@#{SHA}: merge conflict/)).once
 
       @job.perform(@stack, SHA, 'feature-62', nil, 62)
     end
@@ -28,9 +29,13 @@ module Shipit
     test "#perform asks again later while GitHub has no mergeable state" do
       TicketRun.any_instance.stubs(:mergeable?).returns(nil)
       TicketRun.any_instance.expects(:run).never
+      TicketRun.any_instance.expects(:skip).never
 
-      assert_enqueued_with(job: StartTicketJob, args: [@stack, SHA, 'feature-62', nil, 62, 2]) do
-        @job.perform(@stack, SHA, 'feature-62', nil, 62)
+      freeze_time do
+        again = { job: StartTicketJob, args: [@stack, SHA, 'feature-62', nil, 62, 2] }
+        assert_enqueued_with(**again, at: StartTicketJob::MERGEABLE_WAIT.from_now) do
+          @job.perform(@stack, SHA, 'feature-62', nil, 62)
+        end
       end
     end
 
