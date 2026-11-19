@@ -11,7 +11,7 @@ module Shipit
     end
 
     test ".request starts the commands one time for a commit" do
-      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', nil).once
+      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', nil, nil).once
 
       assert TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
       refute TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
@@ -28,7 +28,7 @@ module Shipit
     end
 
     test ".request passes the checks to start" do
-      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', %w(unit_test-ticket)).once
+      StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', %w(unit_test-ticket), nil).once
 
       TicketRun.request(@stack, sha: SHA, branch: 'feature-62', checks: %w(unit_test-ticket))
     end
@@ -76,6 +76,27 @@ module Shipit
       assert_predicate(Pathname.new(marker), :exist?)
     ensure
       FileUtils.rm_f(marker)
+    end
+
+    test "#mergeable? reads the state of the pull request from GitHub" do
+      Shipit.github.api.expects(:pull_request).with(@stack.github_repo_name, 62).returns(stub(mergeable: false))
+
+      assert_equal false, TicketRun.new(@stack, SHA, 'feature-62').mergeable?(62)
+    end
+
+    test "#mergeable? is nil when GitHub gives an error" do
+      Shipit.github.api.expects(:pull_request).raises(Octokit::NotFound)
+
+      assert_nil TicketRun.new(@stack, SHA, 'feature-62').mergeable?(62)
+    end
+
+    test "#skip lets the next request start the commands" do
+      StartTicketJob.stubs(:perform_later)
+      TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
+
+      TicketRun.new(@stack, SHA, 'feature-62').skip
+
+      assert TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
     end
 
     test "#run lets the next request start the commands again when a command fails" do

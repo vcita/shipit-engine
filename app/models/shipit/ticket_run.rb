@@ -15,12 +15,13 @@ module Shipit
     end
 
     # checks: start only these checks. Without it, all the checks of the ticket.
+    # number: the pull request. With it, a pull request with a merge conflict gets no checks.
     # Returns true when it started the commands for this commit.
-    def self.request(stack, sha:, branch:, checks: nil)
+    def self.request(stack, sha:, branch:, checks: nil, number: nil)
       return false unless configured?(stack)
       return false unless Shipit.redis.set(key(stack, sha), Time.now.to_i, nx: true, ex: RETRY_AFTER.to_i)
 
-      StartTicketJob.perform_later(stack, sha, branch, checks)
+      StartTicketJob.perform_later(stack, sha, branch, checks, number)
       true
     end
 
@@ -46,6 +47,20 @@ module Shipit
     rescue Command::Error => e
       # The next request for this commit starts the commands again.
       Rails.logger.error("Train ticket checks of #{@stack.github_repo_name}@#{@sha} did not start: #{e.message}")
+      Shipit.redis.del(self.class.key(@stack, @sha))
+    end
+
+    # nil while GitHub computes it, which takes some seconds after a push.
+    def mergeable?(number)
+      Shipit.github.api.pull_request(@stack.github_repo_name, number).mergeable
+    rescue Octokit::Error => e
+      Rails.logger.warn("Train ticket of #{@stack.github_repo_name}##{number}: no mergeable state: #{e.message}")
+      nil
+    end
+
+    # A later request for this commit can start the checks, for a conflict that a change of the
+    # base branch removed.
+    def skip
       Shipit.redis.del(self.class.key(@stack, @sha))
     end
 
