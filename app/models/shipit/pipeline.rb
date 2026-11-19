@@ -277,10 +277,16 @@ module Shipit
       end
 
       names = checks.map { |check| "`#{check}`" }.join(', ')
-      if state == :failed
+      if state == :failed && merge_request.ticket_rerun_due?
+        merge_request.start_ticket_rerun(checks)
+        merge_request.set_comment("Shipit started these ticket checks again: #{names}. The pull request " \
+                                  "waits in the merge queue for their results.")
+      elsif state == :failed
+        merge_request.note_ticket_failure
         merge_request.reject!('ticket_failed')
         merge_request.set_comment("These ticket checks failed on the last commit: #{names}. Shipit removed " \
-                                  "this pull request from the merge queue. Fix the checks and comment `/shipit` again.")
+                                  "this pull request from the merge queue. Comment `/shipit` to run them one " \
+                                  "more time, or fix them and push.")
       elsif merge_request.ticket_wait_started?
         merge_request.set_comment("This pull request waits for its ticket. These checks are not green on the " \
                                   "last commit: #{names}. Shipit starts the CI of the pull request when they pass.")

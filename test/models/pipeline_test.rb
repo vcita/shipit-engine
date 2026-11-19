@@ -252,6 +252,65 @@ module Shipit
       assert_equal 'ticket_failed', @pending.rejection_reason
     end
 
+    test "#remove_invalid_merge_requests runs the failed ticket checks again on the second /shipit" do
+      ticket_config(%w(lint unit))
+      ticket_status(@pending, 'lint', 'failure')
+      ticket_status(@pending, 'unit', 'success')
+      Shipit.github.api.stubs(:add_comment)
+      @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+      assert_predicate @pending.reload, :rejected?
+
+      travel(2.minutes) do
+        @pending.update!(merge_status: 'pending', rejection_reason: nil)
+        TicketRun.expects(:request)
+          .with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(lint), force: true).once
+        Shipit.github.api.expects(:add_comment)
+          .with(@stack.repository.full_name, @pending.number, regexp_matches(/started these ticket checks again: `lint`/)).once
+
+        assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+        assert_predicate @pending.reload, :pending?
+
+        # The next check of the queue still sees the old failure, and the pull request waits.
+        assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+        assert_predicate @pending.reload, :pending?
+        assert_predicate @pending, :waiting_for_ticket?
+      end
+    end
+
+    test "#remove_invalid_merge_requests takes the pull request when the new run of the ticket check passes" do
+      rerun_failed_lint
+
+      travel(8.minutes) do
+        ticket_status(@pending, 'lint', 'success')
+
+        assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+      end
+    end
+
+    test "#remove_invalid_merge_requests rejects the pull request when the new run of the ticket check fails" do
+      rerun_failed_lint
+
+      travel(8.minutes) do
+        ticket_status(@pending, 'lint', 'failure')
+
+        assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+        assert_equal 'ticket_failed', @pending.reload.rejection_reason
+        assert_predicate @pending, :ticket_rerun_due?
+      end
+    end
+
+    test "#remove_invalid_merge_requests gives a new commit no rerun for the failure of the old commit" do
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'failure')
+      Shipit.github.api.stubs(:add_comment)
+      @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+      assert_predicate @pending.reload, :ticket_rerun_due?
+
+      @pending.update!(head: shipit_commits(:second))
+
+      refute_predicate @pending, :ticket_rerun_due?
+    end
+
     test "#remove_invalid_merge_requests rejects a pull request when a ticket check gives no result in time" do
       ticket_config(%w(lint))
       Shipit.github.api.stubs(:add_comment)
@@ -430,6 +489,20 @@ module Shipit
     def train_config(train)
       @stack.update!(cached_deploy_spec: DeploySpec.new('merge' => { 'train' => train }))
       [@pending, @unknown].each { |merge_request| merge_request.stack.reload }
+    end
+
+    # A failed ticket check, a rejection, a second /shipit two minutes later, and the rerun.
+    def rerun_failed_lint
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'failure')
+      Shipit.github.api.stubs(:add_comment)
+      TicketRun.stubs(:request)
+      @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+      travel(2.minutes) do
+        @pending.update!(merge_status: 'pending', rejection_reason: nil)
+        @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+      end
+      assert_predicate(@pending.reload, :pending?)
     end
 
     def ticket_status(merge_request, context, state, created_at: Time.now.utc)
