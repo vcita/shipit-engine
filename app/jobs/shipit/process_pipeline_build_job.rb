@@ -350,7 +350,7 @@ module Shipit
       predictive_build.predictive_branches.each do |p_branch|
         puts "--------- push_build:: Pushing #{p_branch.branch}"
         begin
-          stack_commands[p_branch.stack].git_push_to_target.run!
+          push_branch(p_branch, stack_commands[p_branch.stack])
         rescue Command::Error => e
           Rails.logger.error("Predictive build #{predictive_build.id}: could not push #{p_branch.branch} " \
                              "to #{p_branch.stack.branch}: #{command_error_details(e)}")
@@ -378,7 +378,38 @@ module Shipit
       pushed
     end
 
+    PUSH_ATTEMPTS = 3
+    PUSH_RETRY_WAIT = 5.seconds
+
     private
+
+    # GitHub accepts a direct push to a branch that requires pull requests only when the push
+    # merges one pull request. So the pull requests of a train go one merge commit at a time.
+    def push_branch(p_branch, commands)
+      merges = commands.git_pull_request_merges.run!.to_s.split
+      return commands.git_push_to_target.run! if merges.size < 2
+
+      expected = commands.git_last_commit(p_branch.stack.branch).run!.to_s.strip
+      merges.each_with_index do |sha, index|
+        push_merge(commands, sha, expected, retries: index.zero? ? 0 : PUSH_ATTEMPTS - 1)
+        expected = sha
+      rescue Command::Error
+        # The pull requests before this one are on the target branch, so they are merged.
+        p_branch.update_completed_requests(p_branch.predictive_merge_requests.waiting.order(:id).first(index))
+        raise
+      end
+    end
+
+    # After the push of one merge, GitHub can need a moment before it accepts the next one.
+    def push_merge(commands, sha, expected, retries:)
+      commands.git_push_commit_to_target(sha, expected).run!
+    rescue Command::Error
+      raise if retries.zero?
+
+      retries -= 1
+      sleep(PUSH_RETRY_WAIT)
+      retry
+    end
 
     # git prints the reason for a failure last.
     def command_error_details(error)

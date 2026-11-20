@@ -359,8 +359,8 @@ module Shipit
       MSG
     end
 
-    def update_completed_requests
-      predictive_merge_requests.waiting.each do |pmr|
+    def update_completed_requests(merged = predictive_merge_requests.waiting)
+      merged.each do |pmr|
         # delete_closed_branch(pmr.merge_request.stack.github_repo_name, pmr.merge_request.branch)
         # A cancel does not take the pipeline lock, so it can come after the last check, during the push.
         if pmr.merge_request.can_complete?

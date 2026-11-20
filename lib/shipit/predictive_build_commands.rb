@@ -43,6 +43,17 @@ module Shipit
       git('push', "--force-with-lease=#{@stack.branch}", '-u', 'origin', 'HEAD', chdir: @chdir, env: env)
     end
 
+    # The merge commits of the pull requests on top of the target branch, oldest first.
+    def git_pull_request_merges
+      git('rev-list', '--first-parent', '--reverse', "origin/#{@stack.branch}..HEAD", chdir: @chdir, env: env)
+    end
+
+    # Fails when the target branch is not at `expected`, so a commit merged meanwhile is never overwritten.
+    def git_push_commit_to_target(sha, expected)
+      git('push', "--force-with-lease=#{@stack.branch}:#{expected}", 'origin', "#{sha}:refs/heads/#{@stack.branch}",
+          chdir: @chdir, env: env)
+    end
+
     def git_reset(to)
       git('reset', '--hard', to, chdir: @chdir, env: env)
     end
