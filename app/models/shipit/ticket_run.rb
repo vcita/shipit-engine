@@ -16,10 +16,11 @@ module Shipit
 
     # checks: start only these checks. Without it, all the checks of the ticket.
     # number: the pull request. With it, a pull request with a merge conflict gets no checks.
+    # force: start the commands also when a request for this commit started them a short time ago.
     # Returns true when it started the commands for this commit.
-    def self.request(stack, sha:, branch:, checks: nil, number: nil)
+    def self.request(stack, sha:, branch:, checks: nil, number: nil, force: false)
       return false unless configured?(stack)
-      return false unless Shipit.redis.set(key(stack, sha), Time.now.to_i, nx: true, ex: RETRY_AFTER.to_i)
+      return false unless Shipit.redis.set(key(stack, sha), Time.now.to_i, nx: !force, ex: RETRY_AFTER.to_i)
 
       StartTicketJob.perform_later(stack, sha, branch, checks, number)
       true

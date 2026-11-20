@@ -27,6 +27,14 @@ module Shipit
       end
     end
 
+    test ".request with force starts the commands again for the same commit" do
+      StartTicketJob.expects(:perform_later).twice
+      TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
+
+      assert TicketRun.request(@stack, sha: SHA, branch: 'feature-62', checks: %w(unit_test-ticket), force: true)
+      refute TicketRun.request(@stack, sha: SHA, branch: 'feature-62')
+    end
+
     test ".request passes the checks to start" do
       StartTicketJob.expects(:perform_later).with(@stack, SHA, 'feature-62', %w(unit_test-ticket), nil).once
 

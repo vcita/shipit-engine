@@ -331,7 +331,7 @@ module Shipit
       @ticket ||= begin
         checks = stack.cached_deploy_spec&.ticket_checks || []
         latest = checks.any? && head ? latest_ticket_statuses : {}
-        failed = checks.select { |check| latest[check]&.failure? || latest[check]&.error? }
+        failed = checks.select { |check| (latest[check]&.failure? || latest[check]&.error?) && !rerun?(latest[check]) }
         waiting = checks.reject { |check| latest[check]&.success? }
         missing = checks.reject { |check| latest.key?(check) }
         if failed.any?
@@ -346,6 +346,25 @@ module Shipit
 
     def waiting_for_ticket?
       ticket.first == :waiting
+    end
+
+    # True for a pull request that left the queue for failed ticket checks on this commit and is
+    # in the queue again: the second /shipit asks for one more run of those checks.
+    def ticket_rerun_due?
+      Shipit.redis.get(ticket_failed_key).present?
+    end
+
+    def note_ticket_failure
+      Shipit.redis.set(ticket_failed_key, Time.now.to_f, ex: 1.day.to_i)
+    end
+
+    # The old failures do not count from now on, so the pull request waits for the new results.
+    def start_ticket_rerun(checks)
+      Shipit.redis.del(ticket_failed_key)
+      Shipit.redis.set(ticket_rerun_key, Time.now.to_f, ex: 1.day.to_i)
+      ticket_wait_started?
+      @ticket = nil
+      TicketRun.request(stack, sha: head.sha, branch: branch, checks: checks, force: true)
     end
 
     # True on the first call for a head commit, so the caller can comment one time.
@@ -508,6 +527,20 @@ module Shipit
 
     def ticket_wait_key
       "MergeRequest::ticket_waiting_since_#{id}_#{head_id}"
+    end
+
+    def ticket_failed_key
+      "MergeRequest::ticket_failed_#{id}_#{head_id}"
+    end
+
+    def ticket_rerun_key
+      "MergeRequest::ticket_rerun_#{id}_#{head_id}"
+    end
+
+    # A result from before the last rerun of the ticket checks.
+    def rerun?(status)
+      rerun_at = Shipit.redis.get(ticket_rerun_key)
+      rerun_at.present? && status.created_at.to_f < rerun_at.to_f
     end
 
     # refresh! loads the commit statuses but not the check runs.
