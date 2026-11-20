@@ -237,8 +237,14 @@ module Shipit
       commands.expects(:git_push_commit_to_target).with('c' * 40, 'b' * 40).returns(stub(run!: true)).once
       commands.expects(:git_push_commit_to_target).with('d' * 40, 'c' * 40)
         .returns(refused_push).times(ProcessPipelineBuildJob::PUSH_ATTEMPTS)
+      comments = []
+      MergeRequest.any_instance.stubs(:set_comment).with { |comment| comments << comment }
 
       assert_empty @job.push_build(@build, { @stack => commands })
+
+      assert_equal 1, comments.size
+      assert_includes comments.first, "Pull request merged to branch #{@stack.branch}"
+      refute_includes comments.first, 'next in line'
 
       assert_predicate @build.reload, :merging_failed?
       assert_predicate @first_pmr.reload, :merged?
