@@ -405,9 +405,10 @@ module Shipit
     # After the push of one merge, GitHub can need a moment before it accepts the next one.
     def push_merge(commands, sha, expected, retries:)
       commands.git_push_commit_to_target(sha, expected).run!
-    rescue Command::Error
+    rescue Command::Error => e
       raise if retries.zero?
 
+      Rails.logger.warn("Push of the merge #{sha} was refused, #{retries} more attempts: #{command_error_details(e)}")
       retries -= 1
       sleep(PUSH_RETRY_WAIT)
       retry

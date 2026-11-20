@@ -207,6 +207,8 @@ module Shipit
     test "#push_build tries the push of a later merge of a train again" do
       @build.waiting_for_merging
       @job.expects(:sleep).with(ProcessPipelineBuildJob::PUSH_RETRY_WAIT).once
+      Rails.logger.stubs(:warn)
+      Rails.logger.expects(:warn).with(all_of(includes('d' * 40), includes('GH006'))).once
       commands = train_commands('c' * 40, 'd' * 40)
       commands.expects(:git_push_commit_to_target).with('c' * 40, 'b' * 40).returns(stub(run!: true)).once
       commands.expects(:git_push_commit_to_target).with('d' * 40, 'c' * 40)
