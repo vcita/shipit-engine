@@ -349,12 +349,16 @@ module Shipit
       pushed = []
       predictive_build.predictive_branches.each do |p_branch|
         puts "--------- push_build:: Pushing #{p_branch.branch}"
+        merged = 0
         begin
-          push_branch(p_branch, stack_commands[p_branch.stack])
+          push_branch(p_branch, stack_commands[p_branch.stack]) { merged += 1 }
         rescue Command::Error => e
           Rails.logger.error("Predictive build #{predictive_build.id}: could not push #{p_branch.branch} " \
                              "to #{p_branch.stack.branch}: #{command_error_details(e)}")
           predictive_build.merging_failed
+          # The pull requests before the refused one are on the target branch, so they are merged.
+          # This comes after merging_failed: the comment of a merged pull request names the state of the build.
+          p_branch.update_completed_requests(p_branch.predictive_merge_requests.waiting.order(:id).first(merged))
           return pushed
         end
         pushed << p_branch
@@ -385,6 +389,7 @@ module Shipit
 
     # GitHub accepts a direct push to a branch that requires pull requests only when the push
     # merges one pull request. So the pull requests of a train go one merge commit at a time.
+    # Yields after each of those pushes.
     def push_branch(p_branch, commands)
       merges = commands.git_pull_request_merges.run!.to_s.split
       return commands.git_push_to_target.run! if merges.size < 2
@@ -393,19 +398,17 @@ module Shipit
       merges.each_with_index do |sha, index|
         push_merge(commands, sha, expected, retries: index.zero? ? 0 : PUSH_ATTEMPTS - 1)
         expected = sha
-      rescue Command::Error
-        # The pull requests before this one are on the target branch, so they are merged.
-        p_branch.update_completed_requests(p_branch.predictive_merge_requests.waiting.order(:id).first(index))
-        raise
+        yield
       end
     end
 
     # After the push of one merge, GitHub can need a moment before it accepts the next one.
     def push_merge(commands, sha, expected, retries:)
       commands.git_push_commit_to_target(sha, expected).run!
-    rescue Command::Error
+    rescue Command::Error => e
       raise if retries.zero?
 
+      Rails.logger.warn("Push of the merge #{sha} was refused, #{retries} more attempts: #{command_error_details(e)}")
       retries -= 1
       sleep(PUSH_RETRY_WAIT)
       retry
