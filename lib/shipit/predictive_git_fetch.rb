@@ -22,12 +22,15 @@ module Shipit
       # the clone; start from a clean, task-private directory.
       FileUtils.rm_rf(@task.working_directory)
       create_directories
-      git('clone', '--recursive', '--origin', 'cache', @stack.git_path, '.',
+      # Clone straight at the predictive branch. The cache's own checked-out branch is not updated by
+      # these fetches, and `env` reads shipit.yml from the working directory, so a clone at that branch
+      # gave the task the commands of an old shipit.yml.
+      git('clone', '--recursive', '--origin', 'cache', '--branch', branch, @stack.git_path, '.',
           env: env, chdir: @task.working_directory).run!
       git('remote', 'add', 'origin', @stack.repo_git_url,
           env: env, chdir: @task.working_directory).run!
-      git('checkout', '-B', branch, "cache/#{branch}",
-          env: env, chdir: @task.working_directory).run!
+      # `env` above loaded the spec before the clone existed; load it again from the checkout.
+      @deploy_spec = nil
     end
 
     def create_directories
