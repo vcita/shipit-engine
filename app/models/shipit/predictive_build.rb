@@ -332,6 +332,13 @@ module Shipit
 
     def aborting_tasks(is_failed, reject_reason)
       Rails.logger.info("Predictive build #{id} aborting_tasks; predictive build data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]")
+      # An abort task that fails counts as a CI failure and rejects the merge requests that still
+      # wait, so the ones that stay in the queue are released before the first abort task runs.
+      rejected, released = predictive_branches.partition do |p_branch|
+        is_failed && (ci_pipeline_failed? || p_branch.failed?)
+      end
+      released.each { |p_branch| p_branch.cancel_predictive_merge_requests(reject_reason) }
+
       if ci_pipeline_tasks_running?
         ci_pipeline_canceling
         abort_run_tasks
@@ -344,13 +351,9 @@ module Shipit
           p_branch.abort_run_tasks
           p_branch.trigger_task(true)
         end
-
-        if is_failed && (ci_pipeline_failed? || p_branch.failed?)
-          p_branch.reject_predictive_merge_requests(reject_reason)
-        else
-          p_branch.cancel_predictive_merge_requests(reject_reason)
-        end
       end
+
+      rejected.each { |p_branch| p_branch.reject_predictive_merge_requests(reject_reason) }
     end
 
     # Merge requests this build still tests that are no longer pending: canceled in the UI

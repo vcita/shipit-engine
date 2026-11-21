@@ -80,6 +80,28 @@ module Shipit
       assert_predicate run_task.reload, :aborting?
     end
 
+    test "#aborting_tasks keeps the merge requests of a stopped build in the queue when the abort task fails" do
+      @build.ci_stack_running
+      branch = @build.predictive_branches.first
+      branch.tasks_running
+      merge_request = shipit_merge_requests(:shipit_pending)
+      predictive_merge_request = PredictiveMergeRequest.create!(
+        merge_request: merge_request, predictive_branch: branch, head: merge_request.head
+      )
+      PerformTaskJob.any_instance.stubs(:checkout_repository)
+      PerformTaskJob.any_instance.stubs(:perform_task).raises(Command::Error, 'abort failed')
+      Shipit.github.api.expects(:add_comment).once.with(
+        @stack.repository.full_name, merge_request.number, includes('stays in the queue')
+      )
+
+      @build.cancel
+      @build.aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_LEFT_QUEUE)
+
+      assert_predicate branch.reload, :failed?
+      assert_predicate predictive_merge_request.reload, :canceled?
+      assert_predicate merge_request.reload, :pending?
+    end
+
     test "#update_status records a FAILURE report and names the failed task in the comment" do
       @build.ci_pipeline_verifying
       merge_request = shipit_merge_requests(:shipit_pending)
