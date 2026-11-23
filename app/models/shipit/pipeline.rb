@@ -270,7 +270,9 @@ module Shipit
       remove_invalid_merge_requests(with_merge_requests, mode)
     end
 
-    # A pull request without a ticket gets no CI and no automation env. An emergency merge skips the ticket.
+    # True when the pull request can start a CI. A train needs a green ticket. A single or promote
+    # build starts while the ticket runs, and ticket_before_merge? holds its merge. An emergency
+    # merge skips the ticket.
     def ticket?(merge_request, mode)
       return true if mode == MERGE_MODE_EMERGENCY
 
@@ -292,6 +294,11 @@ module Shipit
       names = checks.map { |check| "`#{check}`" }.join(', ')
       if state == :failed && merge_request.ticket_rerun_due?
         merge_request.start_ticket_rerun(checks)
+        unless ticket_before_start?(mode)
+          merge_request.set_comment("Shipit started these ticket checks again: #{names}. The pull request " \
+                                    "merges only when they are green.")
+          return true
+        end
         merge_request.set_comment("Shipit started these ticket checks again: #{names}. The pull request " \
                                   "waits in the merge queue for their results.")
       elsif state == :failed

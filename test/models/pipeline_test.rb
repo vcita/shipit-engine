@@ -404,6 +404,53 @@ module Shipit
       assert_equal [@pending], @pipeline.release_candidates(Pipeline::MERGE_MODE_SINGLE)
     end
 
+    test "#remove_invalid_merge_requests takes a single pull request on the second /shipit, and the merge waits for the rerun" do
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'failure')
+      Shipit.github.api.stubs(:add_comment)
+      TicketRun.stubs(:request)
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+
+      travel(2.minutes) do
+        @pending.update!(merge_status: 'pending', rejection_reason: nil)
+        TicketRun.expects(:request).with(
+          @stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(lint), force: true
+        ).once
+
+        assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+        refute @pipeline.ticket_before_merge?(MergeRequest.find(@pending.id))
+      end
+
+      assert_predicate @pending.reload, :pending?
+    end
+
+    test "#release_candidates takes a single root when the second /shipit starts the ticket rerun of a linked pull request" do
+      MergeRequest.where(stack: @stack).where.not(id: [@pending.id, @unknown.id]).update_all(merge_status: 'canceled')
+      @pending.update_column(:mode, Pipeline::MERGE_MODE_SINGLE)
+      @unknown.update_columns(
+        merge_request_id: @pending.id, mergeable: true, mode: Pipeline::MERGE_MODE_SINGLE, head_id: shipit_commits(:fourth).id
+      )
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'success')
+      ticket_status(@unknown.reload, 'lint', 'failure')
+      Shipit.github.api.stubs(:add_comment)
+      TicketRun.stubs(:request)
+      assert_empty @pipeline.release_candidates(Pipeline::MERGE_MODE_SINGLE)
+      assert_equal 'ticket_failed', @unknown.reload.rejection_reason
+
+      travel(2.minutes) do
+        [@pending, @unknown].each { |mr| mr.reload.update!(merge_status: 'pending', rejection_reason: nil) }
+        Shipit.github.api.expects(:add_comment).with(
+          @stack.repository.full_name, @unknown.number, regexp_matches(/started these ticket checks again.*merges only when/m)
+        )
+
+        assert_equal [@pending], @pipeline.release_candidates(Pipeline::MERGE_MODE_SINGLE)
+      end
+
+      assert_predicate @pending.reload, :pending?
+      assert_predicate @unknown.reload, :pending?
+    end
+
     test "#remove_invalid_merge_requests asks for no ticket in emergency mode" do
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'failure')
