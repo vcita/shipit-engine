@@ -41,6 +41,7 @@ module Shipit
           predictive_build.aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_EMERGENCY)
           Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(pipeline)
         end
+        tickets_passed = tickets_passed?(predictive_build)
         return true if stop_if_stale(predictive_build)
       else
         predictive_build = generate_predictive_build(pipeline)
@@ -57,8 +58,19 @@ module Shipit
       when :branched, :tasks_running
         run_tasks(predictive_build)
       when :tasks_completed, :waiting_for_merging
-        merging_process(predictive_build)
+        merging_process(predictive_build) unless tickets_passed == false
       end
+    end
+
+    # A single or promote build starts before the ticket of its pull requests is green. A pull
+    # request with a failed ticket leaves the queue here, and stop_if_stale then stops the build.
+    def tickets_passed?(predictive_build)
+      return true unless predictive_build.mode.in?(Pipeline::TICKET_AT_MERGE_MODES)
+
+      merge_requests = predictive_build.predictive_branches.flat_map do |p_branch|
+        p_branch.predictive_merge_requests.waiting.map(&:merge_request)
+      end
+      merge_requests.uniq.select(&:pending?).map { |mr| predictive_build.pipeline.ticket_before_merge?(mr) }.all?
     end
 
     def merging_process(predictive_build)
