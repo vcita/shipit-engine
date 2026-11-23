@@ -382,6 +382,17 @@ module Shipit
       Shipit.redis.del(ticket_wait_key)
     end
 
+    # A build that runs asks one time a minute, and a ticket that passed does not change.
+    def ticket_passed?
+      Shipit.redis.get(ticket_passed_key).present?
+    end
+
+    def note_ticket_passed
+      end_ticket_wait
+      Shipit.redis.set(ticket_passed_key, 1, ex: 1.day.to_i)
+      true
+    end
+
     def schedule_refresh!
       RefreshMergeRequestJob.perform_later(self)
     end
@@ -527,6 +538,10 @@ module Shipit
 
     def ticket_wait_key
       "MergeRequest::ticket_waiting_since_#{id}_#{head_id}"
+    end
+
+    def ticket_passed_key
+      "MergeRequest::ticket_passed_#{id}_#{head_id}"
     end
 
     def ticket_failed_key

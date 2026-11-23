@@ -334,6 +334,76 @@ module Shipit
       assert_equal Pipeline::MERGE_MODE_SINGLE, Pipeline.default_mode(@stack.reload)
     end
 
+    test "#remove_invalid_merge_requests takes a single pull request while a ticket check runs, with no comment" do
+      ticket_config(%w(lint unit))
+      ticket_status(@pending, 'lint', 'pending')
+      Shipit.github.api.expects(:add_comment).never
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(unit)).twice
+
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_PROMOTE)
+    end
+
+    test "#ticket_before_merge? is true for a green ticket, and asks GitHub one time for it" do
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'success')
+
+      assert @pipeline.ticket_before_merge?(@pending)
+
+      MergeRequest.any_instance.expects(:ticket).never
+      assert @pipeline.ticket_before_merge?(MergeRequest.find(@pending.id))
+    end
+
+    test "#ticket_before_merge? takes a pull request with a failed ticket check out of the queue" do
+      ticket_config(%w(lint unit))
+      ticket_status(@pending, 'lint', 'failure')
+      Shipit.github.api.expects(:add_comment).with(
+        @stack.repository.full_name, @pending.number, regexp_matches(/`lint`.*stops its CI/m)
+      )
+
+      refute @pipeline.ticket_before_merge?(@pending)
+
+      assert_equal 'ticket_failed', @pending.reload.rejection_reason
+      assert_predicate @pending, :ticket_rerun_due?
+    end
+
+    test "#ticket_before_merge? waits for a ticket check that runs, and starts the ones without a run" do
+      ticket_config(%w(lint unit))
+      ticket_status(@pending, 'lint', 'pending')
+      Shipit.github.api.expects(:add_comment).never
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(unit)).once
+
+      refute @pipeline.ticket_before_merge?(@pending)
+
+      assert_predicate @pending.reload, :pending?
+    end
+
+    test "#ticket_before_merge? takes a pull request out of the queue when its ticket gives no result in time" do
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'pending', created_at: 1.minute.ago)
+      Shipit.github.api.stubs(:add_comment)
+      TicketRun.stubs(:request)
+      refute @pipeline.ticket_before_merge?(@pending)
+
+      travel(MergeRequest::TICKET_TIMEOUT + 1.minute) do
+        refute @pipeline.ticket_before_merge?(MergeRequest.find(@pending.id))
+      end
+
+      assert_equal 'ticket_missing', @pending.reload.rejection_reason
+    end
+
+    test "#release_candidates takes a single root while a linked pull request waits for its ticket" do
+      MergeRequest.where(stack: @stack).where.not(id: [@pending.id, @unknown.id]).update_all(merge_status: 'canceled')
+      @pending.update_column(:mode, Pipeline::MERGE_MODE_SINGLE)
+      @unknown.update_columns(merge_request_id: @pending.id, mergeable: true, mode: Pipeline::MERGE_MODE_SINGLE)
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'success')
+      ticket_status(@unknown, 'lint', 'pending')
+      Shipit.github.api.stubs(:add_comment)
+
+      assert_equal [@pending], @pipeline.release_candidates(Pipeline::MERGE_MODE_SINGLE)
+    end
+
     test "#remove_invalid_merge_requests asks for no ticket in emergency mode" do
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'failure')
@@ -360,7 +430,7 @@ module Shipit
       Shipit.github.api.stubs(:add_comment)
       TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(lint)).once
 
-      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_SINGLE)
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
       assert_predicate @pending.reload, :pending?
     end
 
@@ -452,13 +522,23 @@ module Shipit
       end
     end
 
-    test "#queue_message names the ticket checks of a stack that asks for a ticket" do
+    test "#queue_message names the ticket checks of a train before the CI starts" do
+      queue_in_order(@pending)
+      ticket_config(%w(lint unit))
+      @pending.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+
+      msg = @pipeline.queue_message(@pending.reload)
+
+      assert_includes msg, "The CI starts only when these checks are green on the last commit: `lint`, `unit`."
+    end
+
+    test "#queue_message names the ticket checks of a single pull request as a condition of the merge" do
       queue_in_order(@pending)
       ticket_config(%w(lint unit))
 
       msg = @pipeline.queue_message(@pending.reload)
 
-      assert_includes msg, "The CI starts only when these checks are green on the last commit: `lint`, `unit`."
+      assert_includes msg, "The pull request merges only when these checks are green on the last commit: `lint`, `unit`."
     end
 
     test "#queue_message names no ticket checks for an emergency merge" do

@@ -20,6 +20,10 @@ module Shipit
     MERGE_SINGLE_MODES = %w(emergency promote single).freeze
     MERGE_SINGLE_EMERGENCY = %w(emergency).freeze
     QUEUE_ORDER_MODES = %w(single default).freeze
+    # A build in these modes tests one pull request, so it starts before the ticket is green and
+    # only the merge waits for the ticket. A train asks for the ticket before it starts, because a
+    # pull request that fails there also stops the other pull requests of the train.
+    TICKET_AT_MERGE_MODES = %w(promote single).freeze
 
     # The mode of a /shipit without a mode.
     def self.default_mode(stack)
@@ -48,7 +52,7 @@ module Shipit
       merge_requests.each do |merge_request|
         queued_with = merge_request.with_merge_requests.select(&:pending?)
         next if queued_with.any?(&:waiting_for_mergeability?)
-        next if mode != MERGE_MODE_EMERGENCY && queued_with.any?(&:waiting_for_ticket?)
+        next if ticket_before_start?(mode) && queued_with.any?(&:waiting_for_ticket?)
 
         invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
         if invalid_with.any?
@@ -209,7 +213,12 @@ module Shipit
       checks = merge_request.stack.cached_deploy_spec&.ticket_checks || []
       return if checks.empty? || merge_request.mode == MERGE_MODE_EMERGENCY
 
-      "The CI starts only when these checks are green on the last commit: #{checks.map { |c| "`#{c}`" }.join(', ')}."
+      names = checks.map { |c| "`#{c}`" }.join(', ')
+      if ticket_before_start?(merge_request.mode)
+        "The CI starts only when these checks are green on the last commit: #{names}."
+      else
+        "The pull request merges only when these checks are green on the last commit: #{names}."
+      end
     end
 
     def remove_invalid_merge_requests(merge_requests, mode)
@@ -275,6 +284,10 @@ module Shipit
           merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch, checks: missing
         )
       end
+      if state == :waiting && !ticket_before_start?(mode)
+        merge_request.ticket_wait_started?
+        return true
+      end
 
       names = checks.map { |check| "`#{check}`" }.join(', ')
       if state == :failed && merge_request.ticket_rerun_due?
@@ -298,6 +311,45 @@ module Shipit
                                   "request from the merge queue. Comment `/shipit` again when the checks are green.")
       end
       false
+    end
+
+    # For a build that started before the ticket was green. True when the ticket passed. A failed
+    # or missing ticket takes the pull request out of the queue, and its build then stops like the
+    # build of each pull request that leaves the queue.
+    def ticket_before_merge?(merge_request)
+      return true if merge_request.ticket_passed?
+
+      state, checks, missing = merge_request.ticket
+      return merge_request.note_ticket_passed if state == :passed
+
+      names = checks.map { |check| "`#{check}`" }.join(', ')
+      if state == :failed
+        merge_request.end_ticket_wait
+        merge_request.note_ticket_failure
+        merge_request.reject!('ticket_failed')
+        merge_request.set_comment("These ticket checks failed on the last commit: #{names}. Shipit removed " \
+                                  "this pull request from the merge queue and stops its CI. Comment `/shipit` " \
+                                  "to run them one more time, or fix them and push.")
+      elsif merge_request.ticket_timed_out?
+        merge_request.end_ticket_wait
+        merge_request.reject!('ticket_missing')
+        merge_request.set_comment("These ticket checks gave no result in " \
+                                  "#{MergeRequest::TICKET_TIMEOUT.inspect}: #{names}. Shipit removed this pull " \
+                                  "request from the merge queue and stops its CI. Comment `/shipit` again when " \
+                                  "the checks are green.")
+      else
+        merge_request.ticket_wait_started?
+        if missing.any? && merge_request.head
+          TicketRun.request(
+            merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch, checks: missing
+          )
+        end
+      end
+      false
+    end
+
+    def ticket_before_start?(mode)
+      mode != MERGE_MODE_EMERGENCY && !mode.in?(TICKET_AT_MERGE_MODES)
     end
 
     def train_caps(stack)

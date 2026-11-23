@@ -99,6 +99,44 @@ module Shipit
       @job.perform(@pipeline)
     end
 
+    test "#perform does not merge a single build while a ticket check of its pull request runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @job.expects(:merging_process).never
+
+      @job.perform(@pipeline)
+
+      assert_equal 'tasks_completed', @build.reload.status
+      assert_predicate @second.reload, :pending?
+    end
+
+    test "#perform merges a single build when the tickets of its pull requests are green" do
+      single_build_with_ticket('tasks_completed', 'success')
+      @job.expects(:merging_process).with(@build)
+
+      @job.perform(@pipeline)
+    end
+
+    test "#perform stops a single build when a ticket check of its pull request fails" do
+      single_build_with_ticket('tasks_running', 'failure')
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+
+      @job.perform(@pipeline)
+
+      assert_predicate @build.reload, :canceled?
+      assert_predicate @branch.reload, :tasks_canceling?
+      assert_equal 'ticket_failed', @first.reload.rejection_reason
+      assert_equal 'ticket_failed', @second.reload.rejection_reason
+    end
+
+    test "#perform asks for no ticket while a train build runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      Pipeline.any_instance.expects(:ticket_before_merge?).never
+      @job.expects(:merging_process).with(@build)
+
+      @job.perform(@pipeline)
+    end
+
     test "#perform keeps the build when every pull request is still queued" do
       @job.expects(:run_tasks).with(@build)
 
@@ -486,6 +524,14 @@ module Shipit
     end
 
     private
+
+    # The two pull requests of the fixtures have the same head commit, so one status is the ticket of both.
+    def single_build_with_ticket(status, lint_state)
+      @build.update_columns(mode: Pipeline::MERGE_MODE_SINGLE, status: status)
+      @stack.update!(cached_deploy_spec: DeploySpec.new('ci' => { 'ticket' => { 'lint' => 'start lint' } }))
+      Commit.any_instance.stubs(:refresh_check_runs!)
+      @first.head.statuses.create!(stack: @stack, context: 'lint', state: lint_state)
+    end
 
     # The commands of a branch with pull request merges on top of the commit 'b' * 40.
     def train_commands(*merges)
