@@ -72,6 +72,8 @@ module Shipit
     def perform_task
       capture_all!(@commands.install_dependencies)
       Rails.logger.info("Task #{@task.id} install_dependencies")
+      return capture_every!(@commands.perform) if @task.predictive_task_type.to_s == 'abort'
+
       capture_all!(@commands.perform)
     end
 
@@ -101,6 +103,18 @@ module Shipit
 
     def capture_all!(commands)
       commands.map { |c| capture!(c) }
+    end
+
+    # Each abort command stops one Jenkins job, so a command that fails must not keep the other jobs running.
+    def capture_every!(commands)
+      first_error = nil
+      commands.each do |command|
+        capture!(command)
+      rescue Command::Error => error
+        @task.write("\n#{error.message}\n")
+        first_error ||= error
+      end
+      raise first_error if first_error
     end
 
     def capture!(command)
