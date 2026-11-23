@@ -103,6 +103,40 @@ module Shipit
       assert_equal 'failed', @deploy.reload.status
     end
 
+    test "an abort task runs every command and fails when one of them fails" do
+      @deploy.update_column(:predictive_task_type, 'abort')
+      first, second, third = stub_perform_commands(3)
+      @job.expects(:capture!).with(first)
+      @job.expects(:capture!).with(second).raises(Command::Error.new('the build is still running'))
+      @job.expects(:capture!).with(third)
+
+      @job.perform(@deploy)
+
+      assert_equal 'failed', @deploy.reload.status
+      assert_includes @deploy.chunk_output, 'the build is still running'
+    end
+
+    test "an abort task reports the first error when two commands fail" do
+      @deploy.update_column(:predictive_task_type, 'abort')
+      first, second = stub_perform_commands(2)
+      @job.expects(:capture!).with(first).raises(Command::TimedOut.new('no output'))
+      @job.expects(:capture!).with(second).raises(Command::Error.new('the build is still running'))
+
+      @job.perform(@deploy)
+
+      assert_equal 'timedout', @deploy.reload.status
+    end
+
+    test "a task that is not an abort task stops at the first command that fails" do
+      first, second = stub_perform_commands(2)
+      @job.expects(:capture!).with(first).raises(Command::Error.new('something'))
+      @job.expects(:capture!).with(second).never
+
+      @job.perform(@deploy)
+
+      assert_equal 'failed', @deploy.reload.status
+    end
+
     test "bail out if deploy is not pending" do
       @deploy.run!
       @job.expects(:capture!).never
@@ -168,6 +202,19 @@ module Shipit
 
       assert @stack.supports_rollback?
       assert @stack.supports_fetch_deployed_revision?
+    end
+
+    private
+
+    def stub_perform_commands(count)
+      perform = Array.new(count) { |index| stub("command #{index}") }
+      commands = stub(
+        fetched?: FakeSuccessfulCommand.new, clone: [], checkout: nil, install_dependencies: [],
+        perform: perform, clear_working_directory: nil,
+      )
+      Commands.stubs(:for).with(@deploy).returns(commands)
+      @job.stubs(:capture!)
+      perform
     end
   end
 end
