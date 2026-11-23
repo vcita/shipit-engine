@@ -354,6 +354,24 @@ module Shipit
       assert @pipeline.ticket_before_merge?(MergeRequest.find(@pending.id))
     end
 
+    test "#ticket_before_merge? reads the ticket again when a newer run of a check failed after a pass" do
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'success', created_at: 10.minutes.ago)
+      assert @pipeline.ticket_before_merge?(@pending)
+      ticket_status(@pending, 'lint', 'failure', created_at: 5.minutes.ago)
+      Shipit.github.api.stubs(:add_comment)
+      TicketRun.stubs(:request)
+      assert_empty @pipeline.remove_invalid_merge_requests([MergeRequest.find(@pending.id)], Pipeline::MERGE_MODE_SINGLE)
+
+      travel(2.minutes) do
+        @pending.reload.update!(merge_status: 'pending', rejection_reason: nil)
+        again = MergeRequest.find(@pending.id)
+        assert_equal [again], @pipeline.remove_invalid_merge_requests([again], Pipeline::MERGE_MODE_SINGLE)
+
+        refute @pipeline.ticket_before_merge?(MergeRequest.find(@pending.id))
+      end
+    end
+
     test "#ticket_before_merge? takes a pull request with a failed ticket check out of the queue" do
       ticket_config(%w(lint unit))
       ticket_status(@pending, 'lint', 'failure')

@@ -393,6 +393,10 @@ module Shipit
       true
     end
 
+    def forget_ticket_pass
+      Shipit.redis.del(ticket_passed_key)
+    end
+
     def schedule_refresh!
       RefreshMergeRequestJob.perform_later(self)
     end

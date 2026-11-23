@@ -278,6 +278,8 @@ module Shipit
 
       state, checks, missing = merge_request.ticket
       merge_request.end_ticket_wait unless state == :waiting
+      # A check can run again on the same commit, so a pass that an earlier build stored is not the ticket now.
+      merge_request.forget_ticket_pass unless state == :passed
       return true if state == :passed
 
       # A pull request that was open before the stack got its ticket checks, or whose checks Jenkins lost.
