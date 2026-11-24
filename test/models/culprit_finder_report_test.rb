@@ -56,13 +56,44 @@ module Shipit
     test "the report keeps to one environment and to the days asked" do
       assert_empty CulpritFinderReport.new(environment: 'production').rows
       assert_empty CulpritFinderReport.new(since: 1.minute.from_now).rows
-      assert_match(/CI #{@train.id}: .*##{@culprit.number}, confidence 0.9, no CI after it => unknown/, report.to_s)
+      assert_match(/CI #{@train.id}: .*##{@culprit.number}, confidence 0.9, removed, no CI after it => unknown/, report.to_s)
+    end
+
+    test "an answer that Shipit only stored gets a verdict too" do
+      recorded = recorded_train(culprit_pr: @other.number, confidence: 0.9)
+      build('failed', [@other])
+
+      row = report.rows.last
+      assert_equal [recorded, @other, false], [row.build, row.culprit, row.removed]
+      assert_equal CulpritFinderReport::CONFIRMED, row.verdict
+      assert_equal({ named: 2, removed: 1 }, report.summary.slice(:named, :removed))
+      assert_match(/CI #{recorded.id}: .*##{@other.number}, confidence 0.9, recorded only, CI \d+ failed => confirmed/, report.to_s)
+    end
+
+    test "a stored answer that names no pull request of its train has no row" do
+      recorded_train(culprit_pr: nil, confidence: 0.9)
+      recorded_train(culprit_pr: 999_999, confidence: 0.9)
+      recorded_train(culprit_pr: @other.number, culprit_repo: 'another-repo', confidence: 0.9)
+
+      assert_equal [@train], report.rows.map(&:build)
+    end
+
+    test "min_confidence leaves out the answers below it" do
+      recorded_train(culprit_pr: @other.number, confidence: 0.4)
+
+      assert_equal 2, report.rows.size
+      assert_equal [@train], CulpritFinderReport.new(environment: 'integration', min_confidence: 0.7).rows.map(&:build)
     end
 
     private
 
     def report
       CulpritFinderReport.new(environment: 'integration')
+    end
+
+    def recorded_train(answer)
+      build('failed', [@culprit, @other], mode: Pipeline::MERGE_MODE_TRAIN,
+            train_decision: RedTrain::DECISION_LOW_CONFIDENCE, culprit_finder_answer: answer.to_json)
     end
 
     def build(status, merge_requests, attributes = {})

@@ -2,18 +2,20 @@
 
 module Shipit
   # Shows how often the culprit finder named the right pull request of a red train. The check is
-  # the next CI of the pull request that Shipit removed: red alone confirms the finder, green
-  # shows that the finder was wrong.
+  # the next CI of the pull request that the finder named: red alone confirms the finder, green
+  # shows that the finder was wrong. An answer below the threshold of the stack counts too, so
+  # the report also works while Shipit only stores the answers.
   class CulpritFinderReport
     CONFIRMED = 'confirmed'
     WRONG = 'wrong'
     UNKNOWN = 'unknown'
 
-    Row = Struct.new(:build, :culprit, :confidence, :next_build, :verdict, keyword_init: true)
+    Row = Struct.new(:build, :culprit, :confidence, :removed, :next_build, :verdict, keyword_init: true)
 
-    def initialize(since: 7.days.ago, environment: nil)
+    def initialize(since: 7.days.ago, environment: nil, min_confidence: 0)
       @since = since
       @environment = environment
+      @min_confidence = min_confidence
     end
 
     def trains
@@ -25,16 +27,7 @@ module Shipit
     end
 
     def rows
-      @rows ||= trains.select(&:culprit_merge_request).map do |build|
-        next_build = next_build_of(build.culprit_merge_request, build)
-        Row.new(
-          build: build,
-          culprit: build.culprit_merge_request,
-          confidence: JSON.parse(build.culprit_finder_answer.presence || '{}')['confidence'],
-          next_build: next_build,
-          verdict: verdict(next_build),
-        )
-      end
+      @rows ||= trains.map { |build| row(build) }.compact
     end
 
     def summary
@@ -43,6 +36,8 @@ module Shipit
       {
         red_trains: trains.size,
         decisions: trains.group_by(&:train_decision).transform_values(&:size),
+        named: rows.size,
+        removed: rows.count(&:removed),
         confirmed: verdicts.fetch(CONFIRMED, 0),
         wrong: verdicts.fetch(WRONG, 0),
         unknown: verdicts.fetch(UNKNOWN, 0),
@@ -56,12 +51,34 @@ module Shipit
       rows.each do |row|
         culprit = "#{row.culprit.stack.github_repo_name}##{row.culprit.number}"
         next_ci = row.next_build ? "CI #{row.next_build.id} #{row.next_build.status}" : 'no CI after it'
-        lines << "CI #{row.build.id}: #{culprit}, confidence #{row.confidence}, #{next_ci} => #{row.verdict}"
+        action = row.removed ? 'removed' : 'recorded only'
+        lines << "CI #{row.build.id}: #{culprit}, confidence #{row.confidence}, #{action}, #{next_ci} => #{row.verdict}"
       end
       lines.join("\n")
     end
 
     private
+
+    def row(build)
+      answer = JSON.parse(build.culprit_finder_answer.presence || '{}')
+      confidence = Float(answer['confidence'], exception: false)
+      culprit = build.culprit_merge_request || RedTrain.named_in(answer, merge_requests_of(build))
+      return if culprit.nil? || confidence.to_f < @min_confidence
+
+      next_build = next_build_of(culprit, build)
+      Row.new(
+        build: build,
+        culprit: culprit,
+        confidence: confidence,
+        removed: build.culprit_merge_request.present?,
+        next_build: next_build,
+        verdict: verdict(next_build),
+      )
+    end
+
+    def merge_requests_of(build)
+      build.predictive_branches.flat_map { |branch| branch.predictive_merge_requests.map(&:merge_request) }.uniq
+    end
 
     def next_build_of(merge_request, build)
       PredictiveBuild.joins(predictive_branches: :predictive_merge_requests)
