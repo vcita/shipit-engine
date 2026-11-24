@@ -469,6 +469,48 @@ module Shipit
       assert_predicate @unknown.reload, :pending?
     end
 
+    test "#remove_invalid_merge_requests takes a train pull request that is alone in the queue while a ticket check runs" do
+      alone_in_queue(@pending)
+      ticket_config(%w(lint unit))
+      ticket_status(@pending, 'lint', 'pending')
+      Shipit.github.api.expects(:add_comment).never
+      TicketRun.expects(:request).with(@stack, sha: @pending.head.sha, branch: @pending.branch, checks: %w(unit)).once
+
+      assert_equal [@pending], @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#remove_invalid_merge_requests keeps a train pull request in the queue when another pull request waits too" do
+      alone_in_queue(@pending)
+      shipit_merge_requests(:shipit_pending_unmergeable).update_columns(merge_status: 'pending')
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'pending')
+      Shipit.github.api.stubs(:add_comment)
+
+      assert_empty @pipeline.remove_invalid_merge_requests([@pending], Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#release_candidates takes a train root that is alone in the queue while a linked pull request waits for its ticket" do
+      alone_in_queue(@pending)
+      @unknown.update_columns(
+        merge_status: 'pending', merge_request_id: @pending.id, mergeable: true, head_id: shipit_commits(:fourth).id
+      )
+      ticket_config(%w(lint))
+      ticket_status(@pending, 'lint', 'success')
+      ticket_status(@unknown.reload, 'lint', 'pending')
+      Shipit.github.api.stubs(:add_comment)
+
+      assert_equal [@pending], @pipeline.release_candidates(Pipeline::MERGE_MODE_TRAIN)
+    end
+
+    test "#queue_message names the ticket checks of a train pull request that is alone as a condition of the merge" do
+      alone_in_queue(@pending)
+      ticket_config(%w(lint))
+
+      msg = @pipeline.queue_message(@pending.reload)
+
+      assert_includes msg, "The pull request merges only when these checks are green on the last commit: `lint`."
+    end
+
     test "#remove_invalid_merge_requests asks for no ticket in emergency mode" do
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'failure')
@@ -524,7 +566,10 @@ module Shipit
     end
 
     test "#release_candidates skips a root without a rejection while a linked pull request waits for its ticket" do
-      MergeRequest.where(stack: @stack).where.not(id: [@pending.id, @unknown.id]).update_all(merge_status: 'canceled')
+      other = shipit_merge_requests(:shipit_pending_unmergeable)
+      MergeRequest.where(stack: @stack).where.not(id: [@pending.id, @unknown.id, other.id])
+        .update_all(merge_status: 'canceled')
+      other.update_columns(merge_status: 'pending', mode: Pipeline::MERGE_MODE_SINGLE)
       @unknown.update_columns(merge_request_id: @pending.id, mergeable: true)
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'success')
@@ -624,6 +669,12 @@ module Shipit
     end
 
     private
+
+    # The only pending pull request of the stack, in train mode.
+    def alone_in_queue(merge_request)
+      MergeRequest.where(stack: @stack).where.not(id: merge_request.id).update_all(merge_status: 'canceled')
+      merge_request.update_columns(merge_status: 'pending', mode: Pipeline::MERGE_MODE_TRAIN)
+    end
 
     def ticket_config(checks)
       ticket = checks.map { |check| [check, "start #{check}"] }.to_h

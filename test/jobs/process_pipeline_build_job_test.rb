@@ -128,6 +128,30 @@ module Shipit
       assert_equal 'ticket_failed', @second.reload.rejection_reason
     end
 
+    test "#perform does not merge a train of one pull request while a ticket check runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      @second_pmr.destroy
+      @job.expects(:merging_process).never
+
+      @job.perform(@pipeline)
+
+      assert_equal 'tasks_completed', @build.reload.status
+    end
+
+    test "#perform stops a train of one pull request when a ticket check fails" do
+      single_build_with_ticket('tasks_running', 'failure')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      @second_pmr.destroy
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+
+      @job.perform(@pipeline)
+
+      assert_predicate @build.reload, :canceled?
+      assert_equal 'ticket_failed', @first.reload.rejection_reason
+      assert_predicate @second.reload, :pending?
+    end
+
     test "#perform asks for no ticket while a train build runs" do
       single_build_with_ticket('tasks_completed', 'pending')
       @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)

@@ -62,15 +62,19 @@ module Shipit
       end
     end
 
-    # A single or promote build starts before the ticket of its pull requests is green. A pull
-    # request with a failed ticket leaves the queue here, and stop_if_stale then stops the build.
+    # A build of one pull request can start before the ticket is green: a single or promote build,
+    # and a train of a pull request that was alone in the queue. A pull request with a failed
+    # ticket leaves the queue here, and stop_if_stale then stops the build.
     def tickets_passed?(predictive_build)
-      return true unless predictive_build.mode.in?(Pipeline::TICKET_AT_MERGE_MODES)
+      return true if predictive_build.mode == Pipeline::MERGE_MODE_EMERGENCY
 
       merge_requests = predictive_build.predictive_branches.flat_map do |p_branch|
         p_branch.predictive_merge_requests.waiting.map(&:merge_request)
-      end
-      merge_requests.uniq.select(&:pending?).map { |mr| predictive_build.pipeline.ticket_before_merge?(mr) }.all?
+      end.uniq
+      roots = merge_requests.map { |mr| mr.with_parent_merge_request || mr }.uniq
+      return true unless predictive_build.mode.in?(Pipeline::TICKET_AT_MERGE_MODES) || roots.size == 1
+
+      merge_requests.select(&:pending?).map { |mr| predictive_build.pipeline.ticket_before_merge?(mr) }.all?
     end
 
     def merging_process(predictive_build)
