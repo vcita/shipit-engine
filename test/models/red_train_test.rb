@@ -91,6 +91,30 @@ module Shipit
       assert_equal RedTrain::DECISION_LOW_CONFIDENCE, @build.reload.train_decision
     end
 
+    test "a threshold above 1 stores the answer and removes no pull request" do
+      DeploySpec.any_instance.stubs(:train_culprit_confidence).returns(1.1)
+
+      @build.update_status(failed_verify_task(culprit_pr: @first.number, confidence: 1.0, reason: 'It broke login'))
+
+      @build.reload
+      assert_equal RedTrain::DECISION_LOW_CONFIDENCE, @build.train_decision
+      assert_nil @build.culprit_merge_request
+      assert_equal @first.number, JSON.parse(@build.culprit_finder_answer)['culprit_pr']
+      [@first, @second].each do |merge_request|
+        assert_predicate merge_request.reload, :pending?
+        assert_equal Pipeline::MERGE_MODE_SINGLE, merge_request.mode
+      end
+    end
+
+    test "a threshold above 1 does not run the train again on an answer without a culprit" do
+      DeploySpec.any_instance.stubs(:train_culprit_confidence).returns(1.1)
+
+      @build.update_status(failed_verify_task(culprit_pr: nil, confidence: 1.0))
+
+      assert_equal RedTrain::DECISION_LOW_CONFIDENCE, @build.reload.train_decision
+      assert_equal [Pipeline::MERGE_MODE_SINGLE], [@first, @second].map { |mr| mr.reload.mode }.uniq
+    end
+
     test "a failed CI without an answer sends the pull requests to single mode" do
       @build.update_status(failed_verify_task(nil))
 

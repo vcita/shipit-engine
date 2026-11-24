@@ -21,6 +21,19 @@ module Shipit
       nil
     end
 
+    # A number alone can match pull requests of two repositories, so no match and two matches
+    # both mean that the answer names none of the pull requests.
+    def self.named_in(answer, merge_requests)
+      number = Integer(answer['culprit_pr'], exception: false)
+      return unless number
+
+      repo = answer['culprit_repo'].to_s.downcase
+      named = merge_requests.select do |mr|
+        mr.number == number && (repo.empty? || mr.stack.github_repo_name.downcase == repo)
+      end
+      named.first if named.size == 1
+    end
+
     def initialize(predictive_build)
       @build = predictive_build
       @comments = []
@@ -114,17 +127,8 @@ module Shipit
       answer.present? && Float(answer['confidence'], exception: false).to_f >= threshold
     end
 
-    # A number alone can match pull requests of two repositories, so no match and two matches
-    # both mean that the answer names no pull request of this train.
     def named_merge_request(answer)
-      number = Integer(answer['culprit_pr'], exception: false)
-      return unless number
-
-      repo = answer['culprit_repo'].to_s.downcase
-      named = waiting.map(&:merge_request).select do |mr|
-        mr.number == number && (repo.empty? || mr.stack.github_repo_name.downcase == repo)
-      end
-      named.first if named.size == 1
+      self.class.named_in(answer, waiting.map(&:merge_request))
     end
 
     def red_train_before?(root)
