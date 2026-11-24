@@ -580,10 +580,10 @@ module Shipit
       MergeRequest.where(stack: @stack).where.not(id: [@pending.id, @unknown.id, other.id])
         .update_all(merge_status: 'canceled')
       other.update_columns(merge_status: 'pending', mode: Pipeline::MERGE_MODE_SINGLE)
-      @unknown.update_columns(merge_request_id: @pending.id, mergeable: true)
+      @unknown.update_columns(merge_request_id: @pending.id, mergeable: true, head_id: shipit_commits(:fourth).id)
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'success')
-      ticket_status(@unknown, 'lint', 'pending')
+      ticket_status(@unknown.reload, 'lint', 'pending')
       Shipit.github.api.stubs(:add_comment)
 
       assert_empty @pipeline.release_candidates(Pipeline::MERGE_MODE_TRAIN)
