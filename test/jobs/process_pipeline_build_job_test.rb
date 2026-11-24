@@ -152,6 +152,17 @@ module Shipit
       assert_predicate @second.reload, :pending?
     end
 
+    test "#perform does not merge a train of one root and its linked pull request while a ticket check runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      @second.update_column(:merge_request_id, @first.id)
+      @job.expects(:merging_process).never
+
+      @job.perform(@pipeline)
+
+      assert_equal 'tasks_completed', @build.reload.status
+    end
+
     test "#perform asks for no ticket while a train build runs" do
       single_build_with_ticket('tasks_completed', 'pending')
       @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)

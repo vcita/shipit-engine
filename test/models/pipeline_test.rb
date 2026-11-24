@@ -511,6 +511,16 @@ module Shipit
       assert_includes msg, "The pull request merges only when these checks are green on the last commit: `lint`."
     end
 
+    test "#queue_message gives a lone train pull request the merge condition while Shipit still fetches it" do
+      alone_in_queue(@pending)
+      @pending.update_column(:merge_status, 'fetching')
+      ticket_config(%w(lint))
+
+      msg = @pipeline.queue_message(@pending.reload)
+
+      assert_includes msg, "The pull request merges only when these checks are green on the last commit: `lint`."
+    end
+
     test "#remove_invalid_merge_requests asks for no ticket in emergency mode" do
       ticket_config(%w(lint))
       ticket_status(@pending, 'lint', 'failure')

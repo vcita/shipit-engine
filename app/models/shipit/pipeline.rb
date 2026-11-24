@@ -364,10 +364,11 @@ module Shipit
       !alone_in_queue?(merge_request)
     end
 
-    # A linked pull request counts with its root.
+    # A linked pull request counts with its root. The root itself can still be in fetching, when
+    # the reply to its /shipit is written.
     def alone_in_queue?(merge_request)
       root = merge_request.with_parent_merge_request || merge_request
-      merge_requests.pending.root.pluck(:id) == [root.id]
+      merge_requests.pending.root.where.not(id: root.id).none?
     end
 
     def train_caps(stack)
