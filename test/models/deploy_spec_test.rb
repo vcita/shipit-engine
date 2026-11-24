@@ -1177,5 +1177,43 @@ module Shipit
       assert_equal 40, cached.train_max_commits
       assert_in_delta 0.85, cached.train_culprit_confidence
     end
+
+    test "ticket is empty without `ci.ticket`" do
+      @spec.expects(:load_config).returns('merge' => { 'train' => {} })
+      assert_equal({}, @spec.ticket)
+      assert_equal [], @spec.ticket_checks
+    end
+
+    test "ticket maps each check of `ci.ticket` to its command, and does not turn on the train" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => { 'lint-ticket' => 'start lint', 'unit-ticket' => 'start unit' } })
+      assert_equal %w(lint-ticket unit-ticket), @spec.ticket_checks
+      assert_equal 'start unit', @spec.ticket['unit-ticket']
+      refute_predicate @spec, :train?
+      assert_equal @spec.ticket, DeploySpec.load(DeploySpec.dump(@spec)).ticket
+    end
+
+    test "ticket leaves out a check without a command" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => { 'lint-ticket' => 'start lint', 'unit-ticket' => nil } })
+      assert_equal %w(lint-ticket), @spec.ticket_checks
+    end
+
+    test "ticket takes `run` and `abort` of a check in the map form" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => {
+        'lint-ticket' => { 'run' => 'start lint', 'abort' => 'stop lint' },
+        'unit-ticket' => 'start unit',
+        'e2e-ticket' => { 'abort' => 'stop e2e' },
+      } })
+      assert_equal({ 'lint-ticket' => 'start lint', 'unit-ticket' => 'start unit' }, @spec.ticket)
+      assert_equal({ 'lint-ticket' => 'stop lint' }, @spec.ticket_abort)
+
+      cached = DeploySpec.load(DeploySpec.dump(@spec))
+      assert_equal @spec.ticket, cached.ticket
+      assert_equal @spec.ticket_abort, cached.ticket_abort
+    end
+
+    test "ticket ignores the old list form" do
+      @spec.expects(:load_config).returns('ci' => { 'ticket' => %w(lint unit) })
+      assert_equal({}, @spec.ticket)
+    end
   end
 end

@@ -4,6 +4,7 @@ module Shipit
   class PredictiveBuild < Record
     include VerifyPollStrikes
     include LostTaskReport
+    include CleanupAbort
     belongs_to :pipeline
     has_many :predictive_build_tasks
     has_many :predictive_branches
@@ -203,7 +204,12 @@ module Shipit
       pipeline_task_status = task.status.to_sym
       predictive_task_type = task.predictive_task_type.to_sym
       # aborting_tasks stops the run step on purpose, so its end is not a CI result.
-      return if predictive_task_type == :run && (ci_pipeline_canceling? || ci_pipeline_canceled?)
+      # The run step can start a Jenkins job after the abort step, so the abort runs again.
+      if predictive_task_type == :run && (ci_pipeline_canceling? || ci_pipeline_canceled?)
+        schedule_cleanup_abort if task.finished?
+        return
+      end
+      return cleanup_abort_ended(task) if cleanup_abort?(task)
 
       status, jobs, no_match_message = Shipit::PredictiveBuild.parse_task_output(task)
       upsert_ci_job_statuses(jobs)
@@ -217,6 +223,7 @@ module Shipit
       end
 
       unless [:success, :pending, :running].include? pipeline_task_status
+        schedule_cleanup_abort if predictive_task_type == :abort
         # Only a LOST poll (reaped as zombie => :error, hung => :timedout) is
         # tolerated with strikes — it says nothing about the CI itself and the
         # next cron tick re-polls anyway. A :failed poll is the script exiting
@@ -307,6 +314,14 @@ module Shipit
       failed
     end
 
+    def cleanup_abort_tasks
+      predictive_build_tasks
+    end
+
+    def cleanup_abort_stack
+      predictive_branches.first.stack
+    end
+
     # The run step triggers its Jenkins jobs one by one. The abort step aborts only the jobs that
     # already run, so the run step must stop first, or it starts the rest after the abort.
     def abort_run_tasks
@@ -317,6 +332,13 @@ module Shipit
 
     def aborting_tasks(is_failed, reject_reason)
       Rails.logger.info("Predictive build #{id} aborting_tasks; predictive build data: #{self.to_json}; backtrace: [#{Thread.current.backtrace.join(";")}]")
+      # An abort task that fails counts as a CI failure and rejects the merge requests that still
+      # wait, so the ones that stay in the queue are released before the first abort task runs.
+      rejected, released = predictive_branches.partition do |p_branch|
+        is_failed && (ci_pipeline_failed? || p_branch.failed?)
+      end
+      released.each { |p_branch| p_branch.cancel_predictive_merge_requests(reject_reason) }
+
       if ci_pipeline_tasks_running?
         ci_pipeline_canceling
         abort_run_tasks
@@ -329,13 +351,9 @@ module Shipit
           p_branch.abort_run_tasks
           p_branch.trigger_task(true)
         end
-
-        if is_failed && (ci_pipeline_failed? || p_branch.failed?)
-          p_branch.reject_predictive_merge_requests(reject_reason)
-        else
-          p_branch.cancel_predictive_merge_requests(reject_reason)
-        end
       end
+
+      rejected.each { |p_branch| p_branch.reject_predictive_merge_requests(reject_reason) }
     end
 
     # Merge requests this build still tests that are no longer pending: canceled in the UI

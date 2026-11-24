@@ -99,6 +99,79 @@ module Shipit
       @job.perform(@pipeline)
     end
 
+    test "#perform does not merge a single build while a ticket check of its pull request runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @job.expects(:merging_process).never
+
+      @job.perform(@pipeline)
+
+      assert_equal 'tasks_completed', @build.reload.status
+      assert_predicate @second.reload, :pending?
+    end
+
+    test "#perform merges a single build when the tickets of its pull requests are green" do
+      single_build_with_ticket('tasks_completed', 'success')
+      @job.expects(:merging_process).with(@build)
+
+      @job.perform(@pipeline)
+    end
+
+    test "#perform stops a single build when a ticket check of its pull request fails" do
+      single_build_with_ticket('tasks_running', 'failure')
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+
+      @job.perform(@pipeline)
+
+      assert_predicate @build.reload, :canceled?
+      assert_predicate @branch.reload, :tasks_canceling?
+      assert_equal 'ticket_failed', @first.reload.rejection_reason
+      assert_equal 'ticket_failed', @second.reload.rejection_reason
+    end
+
+    test "#perform does not merge a train of one pull request while a ticket check runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      @second_pmr.destroy
+      @job.expects(:merging_process).never
+
+      @job.perform(@pipeline)
+
+      assert_equal 'tasks_completed', @build.reload.status
+    end
+
+    test "#perform stops a train of one pull request when a ticket check fails" do
+      single_build_with_ticket('tasks_running', 'failure')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      @second_pmr.destroy
+      PredictiveBuild.any_instance.stubs(:trigger_pipeline_tasks)
+
+      @job.perform(@pipeline)
+
+      assert_predicate @build.reload, :canceled?
+      assert_equal 'ticket_failed', @first.reload.rejection_reason
+      assert_predicate @second.reload, :pending?
+    end
+
+    test "#perform does not merge a train of one root and its linked pull request while a ticket check runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      @second.update_column(:merge_request_id, @first.id)
+      @job.expects(:merging_process).never
+
+      @job.perform(@pipeline)
+
+      assert_equal 'tasks_completed', @build.reload.status
+    end
+
+    test "#perform asks for no ticket while a train build runs" do
+      single_build_with_ticket('tasks_completed', 'pending')
+      @build.update_column(:mode, Pipeline::MERGE_MODE_TRAIN)
+      Pipeline.any_instance.expects(:ticket_before_merge?).never
+      @job.expects(:merging_process).with(@build)
+
+      @job.perform(@pipeline)
+    end
+
     test "#perform keeps the build when every pull request is still queued" do
       @job.expects(:run_tasks).with(@build)
 
@@ -172,6 +245,7 @@ module Shipit
       @build.waiting_for_merging
       commands = mock
       order = sequence('push')
+      commands.expects(:git_pull_request_merges).returns(stub(run!: "#{'a' * 40}\n")).in_sequence(order)
       commands.expects(:git_push_to_target).returns(stub(run!: true)).in_sequence(order)
       commands.expects(:git_last_commit).returns(stub(run!: +"#{shipit_commits(:fifth).sha}\r\n")).in_sequence(order)
       commands.expects(:git_delete_branch).with(@branch.branch).returns(stub(run!: true)).in_sequence(order)
@@ -182,9 +256,80 @@ module Shipit
       assert_predicate @build.reload, :waiting_for_merging?
     end
 
+    test "#push_build pushes the pull requests of a train one merge commit at a time" do
+      @build.waiting_for_merging
+      base = 'b' * 40
+      first_merge = 'c' * 40
+      second_merge = 'd' * 40
+      commands = mock
+      order = sequence('push')
+      merges = stub(run!: "#{first_merge}\n#{second_merge}\n")
+      commands.expects(:git_pull_request_merges).returns(merges).in_sequence(order)
+      commands.expects(:git_last_commit).with(@stack.branch).returns(stub(run!: "#{base}\n")).in_sequence(order)
+      commands.expects(:git_push_commit_to_target).with(first_merge, base).returns(stub(run!: true)).in_sequence(order)
+      commands.expects(:git_push_commit_to_target).with(second_merge, first_merge)
+        .returns(stub(run!: true)).in_sequence(order)
+      commands.expects(:git_last_commit).returns(stub(run!: +"#{shipit_commits(:fifth).sha}\r\n")).in_sequence(order)
+      commands.expects(:git_delete_branch).with(@branch.branch).returns(stub(run!: true)).in_sequence(order)
+      commands.expects(:git_push_to_target).never
+
+      assert_equal [@branch], @job.push_build(@build, { @stack => commands })
+      assert_predicate @build.reload, :waiting_for_merging?
+    end
+
+    test "#push_build tries the push of a later merge of a train again" do
+      @build.waiting_for_merging
+      @job.expects(:sleep).with(ProcessPipelineBuildJob::PUSH_RETRY_WAIT).once
+      Rails.logger.stubs(:warn)
+      Rails.logger.expects(:warn).with(all_of(includes('d' * 40), includes('GH006'))).once
+      commands = train_commands('c' * 40, 'd' * 40)
+      commands.expects(:git_push_commit_to_target).with('c' * 40, 'b' * 40).returns(stub(run!: true)).once
+      commands.expects(:git_push_commit_to_target).with('d' * 40, 'c' * 40)
+        .returns(refused_push).then.returns(stub(run!: true)).twice
+
+      assert_equal [@branch], @job.push_build(@build, { @stack => commands })
+      assert_predicate @build.reload, :waiting_for_merging?
+    end
+
+    test "#push_build does not try the push of the first merge of a train again" do
+      @build.waiting_for_merging
+      @job.expects(:sleep).never
+      Rails.logger.stubs(:error)
+      commands = train_commands('c' * 40, 'd' * 40)
+      commands.expects(:git_push_commit_to_target).with('c' * 40, 'b' * 40).returns(refused_push).once
+
+      assert_empty @job.push_build(@build, { @stack => commands })
+
+      assert_predicate @build.reload, :merging_failed?
+      assert_predicate @first_pmr.reload, :pending?
+    end
+
+    test "#push_build marks the pushed pull requests merged when a later merge of the train is refused" do
+      @build.waiting_for_merging
+      @job.stubs(:sleep)
+      Rails.logger.stubs(:error)
+      commands = train_commands('c' * 40, 'd' * 40)
+      commands.expects(:git_push_commit_to_target).with('c' * 40, 'b' * 40).returns(stub(run!: true)).once
+      commands.expects(:git_push_commit_to_target).with('d' * 40, 'c' * 40)
+        .returns(refused_push).times(ProcessPipelineBuildJob::PUSH_ATTEMPTS)
+      comments = []
+      MergeRequest.any_instance.stubs(:set_comment).with { |comment| comments << comment }
+
+      assert_empty @job.push_build(@build, { @stack => commands })
+
+      assert_equal 1, comments.size
+      assert_includes comments.first, "Pull request merged to branch #{@stack.branch}"
+      refute_includes comments.first, 'next in line'
+
+      assert_predicate @build.reload, :merging_failed?
+      assert_predicate @first_pmr.reload, :merged?
+      assert_predicate @second_pmr.reload, :pending?
+    end
+
     test "#merge_build puts the pull requests back in the queue when the lease rejects the push" do
       @build.waiting_for_merging
       commands = mock
+      commands.stubs(:git_pull_request_merges).returns(stub(run!: "#{'a' * 40}\n"))
       commands.expects(:git_push_to_target).returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('stale info', 1)) })
       commands.expects(:git_delete_branch).never
       stack = @stack
@@ -205,6 +350,7 @@ module Shipit
       error = Command::Failed.new('git push terminated with exit status 1', 1)
       error.output = "remote: error: GH006: Protected branch update failed for refs/heads/master.\n"
       commands = mock
+      commands.stubs(:git_pull_request_merges).returns(stub(run!: "#{'a' * 40}\n"))
       commands.expects(:git_push_to_target).returns(stub.tap { |s| s.stubs(:run!).raises(error) })
       Rails.logger.stubs(:error)
       Rails.logger.expects(:error).with(includes('GH006: Protected branch update failed'))
@@ -230,6 +376,7 @@ module Shipit
     test "#merge_build rejects the pull requests when the push fails and the target did not move" do
       @build.waiting_for_merging
       commands = mock
+      commands.stubs(:git_pull_request_merges).returns(stub(run!: "#{'a' * 40}\n"))
       commands.expects(:git_push_to_target).returns(stub.tap { |s| s.stubs(:run!).raises(Command::Failed.new('denied', 1)) })
       stack = @stack
       @job.define_singleton_method(:merge_predictive_branches) { |_predictive_build, _dir| { stack => commands } }
@@ -409,6 +556,29 @@ module Shipit
       @job.generate_predictive_build(@pipeline)
 
       assert_empty PredictiveBuild.where(pipeline: @pipeline, status: PredictiveBuild::WIP_STATUSES)
+    end
+
+    private
+
+    # The two pull requests of the fixtures have the same head commit, so one status is the ticket of both.
+    def single_build_with_ticket(status, lint_state)
+      @build.update_columns(mode: Pipeline::MERGE_MODE_SINGLE, status: status)
+      @stack.update!(cached_deploy_spec: DeploySpec.new('ci' => { 'ticket' => { 'lint' => 'start lint' } }))
+      Commit.any_instance.stubs(:refresh_check_runs!)
+      @first.head.statuses.create!(stack: @stack, context: 'lint', state: lint_state)
+    end
+
+    # The commands of a branch with pull request merges on top of the commit 'b' * 40.
+    def train_commands(*merges)
+      commands = mock
+      commands.stubs(:git_pull_request_merges).returns(stub(run!: merges.join("\n")))
+      commands.stubs(:git_last_commit).returns(stub(run!: +"#{'b' * 40}\n"))
+      commands.stubs(:git_delete_branch).returns(stub(run!: true))
+      commands
+    end
+
+    def refused_push
+      stub.tap { |push| push.stubs(:run!).raises(Command::Failed.new('GH006', 1)) }
     end
   end
 end

@@ -41,6 +41,7 @@ module Shipit
           predictive_build.aborting_tasks(false, PredictiveBranch::CANCELED_DUE_TO_EMERGENCY)
           Shipit::ProcessPipelineBuildJob.set(wait: 5.seconds).perform_later(pipeline)
         end
+        tickets_passed = tickets_passed?(predictive_build)
         return true if stop_if_stale(predictive_build)
       else
         predictive_build = generate_predictive_build(pipeline)
@@ -57,8 +58,23 @@ module Shipit
       when :branched, :tasks_running
         run_tasks(predictive_build)
       when :tasks_completed, :waiting_for_merging
-        merging_process(predictive_build)
+        merging_process(predictive_build) unless tickets_passed == false
       end
+    end
+
+    # A build of one pull request can start before the ticket is green: a single or promote build,
+    # and a train of a pull request that was alone in the queue. A pull request with a failed
+    # ticket leaves the queue here, and stop_if_stale then stops the build.
+    def tickets_passed?(predictive_build)
+      return true if predictive_build.mode == Pipeline::MERGE_MODE_EMERGENCY
+
+      merge_requests = predictive_build.predictive_branches.flat_map do |p_branch|
+        p_branch.predictive_merge_requests.waiting.map(&:merge_request)
+      end.uniq
+      roots = merge_requests.map { |mr| mr.with_parent_merge_request || mr }.uniq
+      return true unless predictive_build.mode.in?(Pipeline::TICKET_AT_MERGE_MODES) || roots.size == 1
+
+      merge_requests.select(&:pending?).map { |mr| predictive_build.pipeline.ticket_before_merge?(mr) }.all?
     end
 
     def merging_process(predictive_build)
@@ -349,12 +365,16 @@ module Shipit
       pushed = []
       predictive_build.predictive_branches.each do |p_branch|
         puts "--------- push_build:: Pushing #{p_branch.branch}"
+        merged = 0
         begin
-          stack_commands[p_branch.stack].git_push_to_target.run!
+          push_branch(p_branch, stack_commands[p_branch.stack]) { merged += 1 }
         rescue Command::Error => e
           Rails.logger.error("Predictive build #{predictive_build.id}: could not push #{p_branch.branch} " \
                              "to #{p_branch.stack.branch}: #{command_error_details(e)}")
           predictive_build.merging_failed
+          # The pull requests before the refused one are on the target branch, so they are merged.
+          # This comes after merging_failed: the comment of a merged pull request names the state of the build.
+          p_branch.update_completed_requests(p_branch.predictive_merge_requests.waiting.order(:id).first(merged))
           return pushed
         end
         pushed << p_branch
@@ -378,7 +398,37 @@ module Shipit
       pushed
     end
 
+    PUSH_ATTEMPTS = 3
+    PUSH_RETRY_WAIT = 5.seconds
+
     private
+
+    # GitHub accepts a direct push to a branch that requires pull requests only when the push
+    # merges one pull request. So the pull requests of a train go one merge commit at a time.
+    # Yields after each of those pushes.
+    def push_branch(p_branch, commands)
+      merges = commands.git_pull_request_merges.run!.to_s.split
+      return commands.git_push_to_target.run! if merges.size < 2
+
+      expected = commands.git_last_commit(p_branch.stack.branch).run!.to_s.strip
+      merges.each_with_index do |sha, index|
+        push_merge(commands, sha, expected, retries: index.zero? ? 0 : PUSH_ATTEMPTS - 1)
+        expected = sha
+        yield
+      end
+    end
+
+    # After the push of one merge, GitHub can need a moment before it accepts the next one.
+    def push_merge(commands, sha, expected, retries:)
+      commands.git_push_commit_to_target(sha, expected).run!
+    rescue Command::Error => e
+      raise if retries.zero?
+
+      Rails.logger.warn("Push of the merge #{sha} was refused, #{retries} more attempts: #{command_error_details(e)}")
+      retries -= 1
+      sleep(PUSH_RETRY_WAIT)
+      retry
+    end
 
     # git prints the reason for a failure last.
     def command_error_details(error)
