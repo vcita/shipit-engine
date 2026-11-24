@@ -22,7 +22,8 @@ module Shipit
     QUEUE_ORDER_MODES = %w(single default).freeze
     # A build in these modes tests one pull request, so it starts before the ticket is green and
     # only the merge waits for the ticket. A train asks for the ticket before it starts, because a
-    # pull request that fails there also stops the other pull requests of the train.
+    # pull request that fails there also stops the other pull requests of the train. A pull request
+    # that is alone in the queue has no train to wait for, so it starts like a single one.
     TICKET_AT_MERGE_MODES = %w(promote single).freeze
 
     # The mode of a /shipit without a mode.
@@ -52,7 +53,7 @@ module Shipit
       merge_requests.each do |merge_request|
         queued_with = merge_request.with_merge_requests.select(&:pending?)
         next if queued_with.any?(&:waiting_for_mergeability?)
-        next if ticket_before_start?(mode) && queued_with.any?(&:waiting_for_ticket?)
+        next if ticket_before_start?(merge_request, mode) && queued_with.any?(&:waiting_for_ticket?)
 
         invalid_with = merge_request.with_merge_requests.reject { |with_mr| valid_with.include?(with_mr) }
         if invalid_with.any?
@@ -214,7 +215,7 @@ module Shipit
       return if checks.empty? || merge_request.mode == MERGE_MODE_EMERGENCY
 
       names = checks.map { |c| "`#{c}`" }.join(', ')
-      if ticket_before_start?(merge_request.mode)
+      if ticket_before_start?(merge_request, merge_request.mode)
         "The CI starts only when these checks are green on the last commit: #{names}."
       else
         "The pull request merges only when these checks are green on the last commit: #{names}."
@@ -271,8 +272,8 @@ module Shipit
     end
 
     # True when the pull request can start a CI. A train needs a green ticket. A single or promote
-    # build starts while the ticket runs, and ticket_before_merge? holds its merge. An emergency
-    # merge skips the ticket.
+    # build, and a train of a pull request that is alone in the queue, starts while the ticket runs,
+    # and ticket_before_merge? holds its merge. An emergency merge skips the ticket.
     def ticket?(merge_request, mode)
       return true if mode == MERGE_MODE_EMERGENCY
 
@@ -288,7 +289,7 @@ module Shipit
           merge_request.stack, sha: merge_request.head.sha, branch: merge_request.branch, checks: missing
         )
       end
-      if state == :waiting && !ticket_before_start?(mode)
+      if state == :waiting && !ticket_before_start?(merge_request, mode)
         merge_request.ticket_wait_started?
         return true
       end
@@ -296,7 +297,7 @@ module Shipit
       names = checks.map { |check| "`#{check}`" }.join(', ')
       if state == :failed && merge_request.ticket_rerun_due?
         merge_request.start_ticket_rerun(checks)
-        unless ticket_before_start?(mode)
+        unless ticket_before_start?(merge_request, mode)
           merge_request.set_comment("Shipit started these ticket checks again: #{names}. The pull request " \
                                     "merges only when they are green.")
           return true
@@ -357,8 +358,17 @@ module Shipit
       false
     end
 
-    def ticket_before_start?(mode)
-      mode != MERGE_MODE_EMERGENCY && !mode.in?(TICKET_AT_MERGE_MODES)
+    def ticket_before_start?(merge_request, mode)
+      return false if mode == MERGE_MODE_EMERGENCY || mode.in?(TICKET_AT_MERGE_MODES)
+
+      !alone_in_queue?(merge_request)
+    end
+
+    # A linked pull request counts with its root. The root itself can still be in fetching, when
+    # the reply to its /shipit is written.
+    def alone_in_queue?(merge_request)
+      root = merge_request.with_parent_merge_request || merge_request
+      merge_requests.pending.root.where.not(id: root.id).none?
     end
 
     def train_caps(stack)
